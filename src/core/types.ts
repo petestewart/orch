@@ -164,6 +164,7 @@ export type EventType =
   | 'agent:failed'
   | 'agent:blocked'
   | 'agent:stopped'
+  | 'agent:stop-request'
 
   // Epic/Worktree events
   | 'epic:worktree-created'
@@ -233,6 +234,11 @@ export interface AgentStoppedEvent extends BaseEvent {
   ticketId: string;
 }
 
+export interface AgentStopRequestEvent extends BaseEvent {
+  type: 'agent:stop-request';
+  agentId: string;
+}
+
 export interface LogEntryEvent extends BaseEvent {
   type: 'log:entry';
   level: 'debug' | 'info' | 'warn' | 'error' | 'event';
@@ -252,6 +258,7 @@ export type OrchEvent =
   | AgentFailedEvent
   | AgentBlockedEvent
   | AgentStoppedEvent
+  | AgentStopRequestEvent
   | LogEntryEvent
   | BaseEvent;
 

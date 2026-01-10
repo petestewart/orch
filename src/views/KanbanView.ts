@@ -14,6 +14,7 @@ export const COLUMNS: { title: string; status: TicketStatus }[] = [
   { title: 'Backlog', status: 'backlog' },
   { title: 'In Progress', status: 'in_progress' },
   { title: 'Review', status: 'review' },
+  { title: 'QA', status: 'qa' },
   { title: 'Done', status: 'done' },
 ]
 

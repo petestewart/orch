@@ -74,6 +74,11 @@ export interface AppState {
   selectedAgentIndex: number
   // Logs view state
   selectedLogIndex: number
+  logsLevelFilter?: LogLevel
+  logsAgentFilter?: string
+  logsTicketFilter?: number
+  logsSearchQuery?: string
+  logsAutoScroll: boolean
   // Plan view state
   planViewActivePane: 'chat' | 'docs'
   planViewActiveDoc: 'prd' | 'plan' | 'tickets'

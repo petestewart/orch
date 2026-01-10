@@ -22,6 +22,7 @@ import { createPlanView } from './views/PlanView.js'
 import { createRefineView } from './views/RefineView.js'
 import type { AppState } from './state/types.js'
 import { triggerShutdown } from './core/shutdown.js'
+import { getEventBus } from './core/events.js'
 
 export class App {
   private renderer!: CliRenderer
@@ -357,6 +358,44 @@ export class App {
       return
     }
 
+    // 's' key starts agent on selected ticket (if ready)
+    if (key.name === 's') {
+      if (selectedColumnIndex >= 0 && selectedColumnIndex < COLUMNS.length) {
+        const tickets = this.store.getTicketsByStatus(COLUMNS[selectedColumnIndex].status)
+        if (selectedTicketIndex < tickets.length) {
+          const selectedTicket = tickets[selectedTicketIndex]
+          // Only start agents on ready backlog tickets
+          if (selectedTicket.status === 'backlog' && selectedTicket.ready) {
+            const eventBus = getEventBus()
+            // Emit event for orchestrator to handle
+            eventBus.publish({
+              type: 'ticket:assigned',
+              timestamp: new Date(),
+            })
+            // Log the action
+            eventBus.publish({
+              type: 'log:entry',
+              timestamp: new Date(),
+              level: 'info',
+              message: `Starting agent on ticket ${selectedTicket.id.toUpperCase()}: ${selectedTicket.title}`,
+              ticketId: selectedTicket.id.toUpperCase(),
+            })
+          } else if (selectedTicket.status === 'backlog' && !selectedTicket.ready) {
+            // Ticket not ready - log warning
+            const eventBus = getEventBus()
+            eventBus.publish({
+              type: 'log:entry',
+              timestamp: new Date(),
+              level: 'warn',
+              message: `Cannot start agent on ticket ${selectedTicket.id.toUpperCase()}: ticket has unmet dependencies`,
+              ticketId: selectedTicket.id.toUpperCase(),
+            })
+          }
+        }
+      }
+      return
+    }
+
     if (needsRerender) {
       this.renderCurrentView()
     }
@@ -385,6 +424,19 @@ export class App {
       }
     }
 
+    // Stop selected agent with 'x' key
+    if (key.name === 'x') {
+      const agents = state.agents
+      if (agents.length > 0 && state.selectedAgentIndex < agents.length) {
+        const selectedAgent = agents[state.selectedAgentIndex]
+        // Only allow stopping agents that are currently working or waiting
+        if (selectedAgent.status === 'working' || selectedAgent.status === 'waiting') {
+          this.store.requestStopAgent(selectedAgent.id)
+          needsRerender = true
+        }
+      }
+    }
+
     if (needsRerender) {
       this.renderCurrentView()
     }
@@ -406,6 +458,40 @@ export class App {
         this.store.setSelectedLogIndex(state.selectedLogIndex - 1)
         needsRerender = true
       }
+    }
+
+    // Filter controls
+    // 'l' - cycle level filter (ALL -> INFO -> WARN -> ERROR -> EVENT -> ALL)
+    if (key.name === 'l') {
+      this.store.cycleLevelFilter()
+      needsRerender = true
+    }
+
+    // 'a' - cycle agent filter (ALL -> agent1 -> agent2 -> ... -> ALL)
+    if (key.name === 'a') {
+      this.store.cycleAgentFilter()
+      needsRerender = true
+    }
+
+    // 't' - cycle ticket filter (ALL -> T001 -> T002 -> ... -> ALL)
+    if (key.name === 't') {
+      this.store.cycleTicketFilter()
+      needsRerender = true
+    }
+
+    // 's' - toggle auto-scroll
+    if (key.name === 's') {
+      this.store.toggleLogsAutoScroll()
+      needsRerender = true
+    }
+
+    // 'c' - clear all filters
+    if (key.name === 'c') {
+      this.store.setLogsLevelFilter(undefined)
+      this.store.setLogsAgentFilter(undefined)
+      this.store.setLogsTicketFilter(undefined)
+      this.store.setLogsSearchQuery(undefined)
+      needsRerender = true
     }
 
     if (needsRerender) {

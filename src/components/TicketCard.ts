@@ -122,6 +122,22 @@ export function createTicketCard(ctx: RenderContext, props: TicketCardProps): Bo
     rightInfo.add(progressText)
   }
 
+  // Review indicator - show when ticket is in review status
+  if (ticket.status === 'review') {
+    const reviewIndicator = new TextRenderable(ctx, {
+      content: t`${fg(colors.review)('◉')} ${dim(fg(colors.textDim)('reviewing'))}`,
+    })
+    rightInfo.add(reviewIndicator)
+  }
+
+  // QA indicator - show when ticket is in QA status
+  if (ticket.status === 'qa') {
+    const qaIndicator = new TextRenderable(ctx, {
+      content: t`${fg(colors.yellow)('◉')} ${dim(fg(colors.textDim)('testing'))}`,
+    })
+    rightInfo.add(qaIndicator)
+  }
+
   bottomRow.add(rightInfo)
   card.add(bottomRow)
 

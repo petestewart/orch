@@ -20,6 +20,7 @@ import type {
   AgentFailedEvent,
   AgentBlockedEvent,
   AgentStoppedEvent,
+  AgentStopRequestEvent,
   LogEntryEvent,
   OrchEvent,
 } from '../core/types.js';
@@ -205,6 +206,11 @@ export class Store {
       selectedAgentIndex: 0,
       // Logs view state
       selectedLogIndex: 0,
+      logsLevelFilter: undefined,
+      logsAgentFilter: undefined,
+      logsTicketFilter: undefined,
+      logsSearchQuery: undefined,
+      logsAutoScroll: true,
       // Plan view state
       planViewActivePane: 'chat',
       planViewActiveDoc: 'prd',
@@ -670,6 +676,84 @@ export class Store {
     this.notifyChange();
   }
 
+  setLogsLevelFilter(level: AppState['logsLevelFilter']) {
+    this.state.logsLevelFilter = level;
+    this.notifyChange();
+  }
+
+  setLogsAgentFilter(agentId: string | undefined) {
+    this.state.logsAgentFilter = agentId;
+    this.notifyChange();
+  }
+
+  setLogsTicketFilter(ticketNumber: number | undefined) {
+    this.state.logsTicketFilter = ticketNumber;
+    this.notifyChange();
+  }
+
+  setLogsSearchQuery(query: string | undefined) {
+    this.state.logsSearchQuery = query;
+    this.notifyChange();
+  }
+
+  setLogsAutoScroll(autoScroll: boolean) {
+    this.state.logsAutoScroll = autoScroll;
+    this.notifyChange();
+  }
+
+  toggleLogsAutoScroll() {
+    this.state.logsAutoScroll = !this.state.logsAutoScroll;
+    this.notifyChange();
+  }
+
+  cycleLevelFilter() {
+    const levels: Array<AppState['logsLevelFilter']> = [undefined, 'INFO', 'WARN', 'ERROR', 'EVENT'];
+    const currentIndex = levels.indexOf(this.state.logsLevelFilter);
+    const nextIndex = (currentIndex + 1) % levels.length;
+    this.state.logsLevelFilter = levels[nextIndex];
+    this.notifyChange();
+  }
+
+  getUniqueAgentIds(): string[] {
+    const agentIds = new Set<string>();
+    for (const log of this.state.logs) {
+      if (log.agentId) {
+        agentIds.add(log.agentId);
+      }
+    }
+    return Array.from(agentIds).sort();
+  }
+
+  getUniqueTicketNumbers(): number[] {
+    const ticketNumbers = new Set<number>();
+    for (const log of this.state.logs) {
+      if (log.ticketNumber !== undefined) {
+        ticketNumbers.add(log.ticketNumber);
+      }
+    }
+    return Array.from(ticketNumbers).sort((a, b) => a - b);
+  }
+
+  cycleAgentFilter() {
+    const agentIds = ['', ...this.getUniqueAgentIds()]; // '' means "ALL"
+    const currentIndex = this.state.logsAgentFilter
+      ? agentIds.indexOf(this.state.logsAgentFilter)
+      : 0;
+    const nextIndex = (currentIndex + 1) % agentIds.length;
+    this.state.logsAgentFilter = agentIds[nextIndex] || undefined;
+    this.notifyChange();
+  }
+
+  cycleTicketFilter() {
+    const ticketNumbers: Array<number | undefined> = [undefined, ...this.getUniqueTicketNumbers()];
+    const currentIndex = this.state.logsTicketFilter !== undefined
+      ? ticketNumbers.indexOf(this.state.logsTicketFilter)
+      : 0;
+    const nextIndex = (currentIndex + 1) % ticketNumbers.length;
+    this.state.logsTicketFilter = ticketNumbers[nextIndex];
+    this.notifyChange();
+  }
+
   setPlanViewActivePane(pane: 'chat' | 'docs') {
     this.state.planViewActivePane = pane;
     this.notifyChange();
@@ -688,6 +772,28 @@ export class Store {
   setRefineViewSelectedTicket(index: number) {
     this.state.refineViewSelectedTicket = index;
     this.notifyChange();
+  }
+
+  /**
+   * Request to stop an agent by publishing an agent:stop-request event.
+   * The Orchestrator or AgentManager will handle this event and stop the agent.
+   * @param agentId The ID of the agent to stop
+   */
+  requestStopAgent(agentId: string): void {
+    const agent = this.state.agents.find(a => a.id === agentId);
+    if (!agent) {
+      return; // Agent not found, nothing to do
+    }
+
+    // Publish stop request event
+    this.eventBus.publish({
+      type: 'agent:stop-request',
+      timestamp: new Date(),
+      agentId,
+    });
+
+    // Add log entry
+    this.addSystemLog('EVENT', `Stop requested for agent ${agentId}`);
   }
 
   // Removed simulation methods (updateAgentProgress, addRandomLogEntry)
