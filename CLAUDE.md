@@ -84,7 +84,7 @@ Agents signal completion/blockers via markers in their output:
 
 ## Current Implementation Status
 
-**Done (19 tickets):** T001, T002, T003, T004, T005, T006, T007, T008, T009, T017, T022, T026, T027, T028, T030, T031, T032, T033, T037
+**Done (27 tickets):** T001-T013, T015-T017, T022-T024, T026-T028, T030-T033, T037
 
 **All P0 tickets complete.** Core orchestration infrastructure is fully implemented:
 - Event bus, plan parsing, dependency graph
@@ -93,10 +93,13 @@ Agents signal completion/blockers via markers in their output:
 - Review and QA agents with automation modes
 - Status pipeline with transition validation
 - Epic/worktree management with merge handling
+- State store with event subscriptions
+- UI views connected to real state (Kanban, Agents, Logs, Session)
+- Unit test infrastructure and integration tests
 
-**Remaining P1:** T010 (Refactor State Store), T011-T016 (UI connections), T023-T024 (Tests), T029 (Human Intervention UI), T034-T036 (Epic grouping, AI-assisted tickets), T038 (Plan Audit)
+**Remaining P1:** T014 (TicketView Agent Actions), T029 (Human Intervention UI), T034 (Kanban Epic Grouping), T035 (AI-Assisted Tickets), T036 (Refine Agent), T038 (Plan Audit)
 
-**Note:** TUI currently uses mock data. T010 will connect real orchestration state to the UI.
+**Remaining P2:** T018-T021 (Error Recovery, Help Overlay, Plan/Refine Views), T025 (Cost Tracking)
 
 ## Testing
 

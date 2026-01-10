@@ -698,8 +698,8 @@ After all acceptance criteria are met, output exactly:
 
 ### Ticket: T024 Integration Tests
 - **Priority:** P1
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Create integration tests for end-to-end workflows. Test full ticket completion cycle.
 - **Acceptance Criteria:**
   - Test: parse plan → compute ready → assign agent (mock) → complete → update plan
@@ -709,7 +709,7 @@ After all acceptance criteria are met, output exactly:
   - Completes in < 10 seconds
 - **Validation Steps:**
   - `bun test` passes all integration tests
-- **Notes:**
+- **Notes:** Implementation complete. 15 integration tests covering full completion cycle, dependency chains (A→B, A→B→C, diamond), concurrent agents, failure/blocked handling, priority ordering, and plan persistence. Uses mock AgentManager and EpicManager with real PlanStore. All tests pass in < 2 seconds.
 - **Dependencies:** T023, T008
 
 ### Ticket: T025 Cost Tracking
