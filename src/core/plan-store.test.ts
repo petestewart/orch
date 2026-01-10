@@ -1085,3 +1085,445 @@ describe('serializeTicket', () => {
     expect(parsed.notes).toBe(original.notes);
   });
 });
+
+// =============================================================================
+// T037: Plan Parser Epic Support Tests
+// =============================================================================
+
+import { parseEpics, validateEpicPaths, findMissingEpicAssignments, type EpicWarning } from './plan-store';
+import type { Epic } from './types';
+import { mkdir } from 'node:fs/promises';
+
+describe('parseTicket with epic field (T037)', () => {
+  test('parses epic field from ticket', () => {
+    const markdown = `### Ticket: T001 Test Task
+- **Priority:** P0
+- **Status:** Todo
+- **Epic:** core
+- **Owner:** Unassigned`;
+
+    const result = parseTicket(markdown);
+
+    expect('line' in result).toBe(false);
+    const ticket = result as Ticket;
+    expect(ticket.epic).toBe('core');
+  });
+
+  test('parses ticket without epic field', () => {
+    const markdown = `### Ticket: T001 Test Task
+- **Priority:** P0
+- **Status:** Todo
+- **Owner:** Unassigned`;
+
+    const result = parseTicket(markdown);
+
+    expect('line' in result).toBe(false);
+    const ticket = result as Ticket;
+    expect(ticket.epic).toBeUndefined();
+  });
+
+  test('handles epic field with complex names', () => {
+    const markdown = `### Ticket: T001 Test Task
+- **Priority:** P0
+- **Status:** Todo
+- **Epic:** frontend-ui-components`;
+
+    const result = parseTicket(markdown);
+    const ticket = result as Ticket;
+    expect(ticket.epic).toBe('frontend-ui-components');
+  });
+});
+
+describe('parseEpics (T037)', () => {
+  test('parses epic definitions from markdown', () => {
+    const markdown = `# Project Plan
+
+## Epics
+
+### Epic: core
+- **Path:** src/core
+- **Description:** Core orchestration logic and utilities
+
+### Epic: ui
+- **Path:** src/components
+- **Description:** UI components and views
+
+## 7. Task Backlog
+
+### Ticket: T001 Test
+- **Priority:** P0
+- **Status:** Todo
+`;
+
+    const epics = parseEpics(markdown);
+
+    expect(epics).toHaveLength(2);
+    expect(epics[0].name).toBe('core');
+    expect(epics[0].path).toBe('src/core');
+    expect(epics[0].description).toBe('Core orchestration logic and utilities');
+    expect(epics[1].name).toBe('ui');
+    expect(epics[1].path).toBe('src/components');
+    expect(epics[1].description).toBe('UI components and views');
+  });
+
+  test('parses epic without description', () => {
+    const markdown = `## Epics
+
+### Epic: minimal
+- **Path:** src/minimal
+
+## Other Section
+`;
+
+    const epics = parseEpics(markdown);
+
+    expect(epics).toHaveLength(1);
+    expect(epics[0].name).toBe('minimal');
+    expect(epics[0].path).toBe('src/minimal');
+    expect(epics[0].description).toBeUndefined();
+  });
+
+  test('returns empty array when no Epics section', () => {
+    const markdown = `# Project Plan
+
+## 1. Overview
+
+Some overview text.
+
+## 7. Task Backlog
+
+### Ticket: T001 Test
+- **Priority:** P0
+- **Status:** Todo
+`;
+
+    const epics = parseEpics(markdown);
+
+    expect(epics).toHaveLength(0);
+  });
+
+  test('handles singular and plural Epics heading', () => {
+    const markdown1 = `## Epic
+
+### Epic: single
+- **Path:** src/single
+`;
+
+    const markdown2 = `## Epics
+
+### Epic: multi
+- **Path:** src/multi
+`;
+
+    expect(parseEpics(markdown1)).toHaveLength(1);
+    expect(parseEpics(markdown2)).toHaveLength(1);
+  });
+
+  test('handles epic at end of file', () => {
+    const markdown = `## Epics
+
+### Epic: last
+- **Path:** src/last
+- **Description:** Last epic in file`;
+
+    const epics = parseEpics(markdown);
+
+    expect(epics).toHaveLength(1);
+    expect(epics[0].name).toBe('last');
+    expect(epics[0].path).toBe('src/last');
+    expect(epics[0].description).toBe('Last epic in file');
+  });
+
+  test('handles epic with empty path', () => {
+    const markdown = `## Epics
+
+### Epic: no-path
+- **Path:**
+- **Description:** Epic with no path
+`;
+
+    const epics = parseEpics(markdown);
+
+    expect(epics).toHaveLength(1);
+    expect(epics[0].name).toBe('no-path');
+    expect(epics[0].path).toBe('');
+  });
+});
+
+describe('validateEpicPaths (T037)', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'epic-path-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true });
+  });
+
+  test('returns no warnings for valid paths', async () => {
+    // Create test directories
+    await mkdir(join(tempDir, 'src'));
+    await mkdir(join(tempDir, 'src/core'));
+
+    const epics: Epic[] = [
+      { name: 'core', path: 'src/core' },
+    ];
+
+    const warnings = await validateEpicPaths(epics, tempDir);
+
+    expect(warnings).toHaveLength(0);
+  });
+
+  test('warns about non-existent paths', async () => {
+    const epics: Epic[] = [
+      { name: 'missing', path: 'src/does-not-exist' },
+    ];
+
+    const warnings = await validateEpicPaths(epics, tempDir);
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].epic).toBe('missing');
+    expect(warnings[0].message).toContain('does not exist');
+  });
+
+  test('warns about empty paths', async () => {
+    const epics: Epic[] = [
+      { name: 'empty', path: '' },
+    ];
+
+    const warnings = await validateEpicPaths(epics, tempDir);
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].epic).toBe('empty');
+    expect(warnings[0].message).toContain('no path defined');
+  });
+
+  test('warns when path is a file, not directory', async () => {
+    // Create a file instead of directory
+    await writeFile(join(tempDir, 'not-a-dir'), 'content');
+
+    const epics: Epic[] = [
+      { name: 'file-epic', path: 'not-a-dir' },
+    ];
+
+    const warnings = await validateEpicPaths(epics, tempDir);
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].epic).toBe('file-epic');
+    expect(warnings[0].message).toContain('not a directory');
+  });
+});
+
+describe('findMissingEpicAssignments (T037)', () => {
+  test('finds tickets without epic assignment', () => {
+    const tickets: Ticket[] = [
+      { id: 'T001', title: 'No Epic', priority: 'P0', status: 'Todo', dependencies: [], acceptanceCriteria: [], validationSteps: [] },
+      { id: 'T002', title: 'Has Epic', priority: 'P0', status: 'Todo', epic: 'core', dependencies: [], acceptanceCriteria: [], validationSteps: [] },
+    ];
+
+    const epics: Epic[] = [
+      { name: 'core', path: 'src/core' },
+    ];
+
+    const warnings = findMissingEpicAssignments(tickets, epics);
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].ticketId).toBe('T001');
+    expect(warnings[0].message).toContain('no epic assigned');
+  });
+
+  test('finds tickets referencing undefined epics', () => {
+    const tickets: Ticket[] = [
+      { id: 'T001', title: 'Unknown Epic', priority: 'P0', status: 'Todo', epic: 'nonexistent', dependencies: [], acceptanceCriteria: [], validationSteps: [] },
+    ];
+
+    const epics: Epic[] = [
+      { name: 'core', path: 'src/core' },
+    ];
+
+    const warnings = findMissingEpicAssignments(tickets, epics);
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].ticketId).toBe('T001');
+    expect(warnings[0].message).toContain('undefined epic');
+    expect(warnings[0].message).toContain('nonexistent');
+  });
+
+  test('skips Done tickets', () => {
+    const tickets: Ticket[] = [
+      { id: 'T001', title: 'Done No Epic', priority: 'P0', status: 'Done', dependencies: [], acceptanceCriteria: [], validationSteps: [] },
+    ];
+
+    const epics: Epic[] = [];
+
+    const warnings = findMissingEpicAssignments(tickets, epics);
+
+    expect(warnings).toHaveLength(0);
+  });
+
+  test('returns no warnings when all tickets have valid epics', () => {
+    const tickets: Ticket[] = [
+      { id: 'T001', title: 'Core Task', priority: 'P0', status: 'Todo', epic: 'core', dependencies: [], acceptanceCriteria: [], validationSteps: [] },
+      { id: 'T002', title: 'UI Task', priority: 'P0', status: 'InProgress', epic: 'ui', dependencies: [], acceptanceCriteria: [], validationSteps: [] },
+    ];
+
+    const epics: Epic[] = [
+      { name: 'core', path: 'src/core' },
+      { name: 'ui', path: 'src/ui' },
+    ];
+
+    const warnings = findMissingEpicAssignments(tickets, epics);
+
+    expect(warnings).toHaveLength(0);
+  });
+
+  test('allows missing epic when no epics are defined', () => {
+    // When no epics are defined in the plan, tickets without epic assignment
+    // should still generate warnings (to encourage epic usage)
+    const tickets: Ticket[] = [
+      { id: 'T001', title: 'No Epic', priority: 'P0', status: 'Todo', dependencies: [], acceptanceCriteria: [], validationSteps: [] },
+    ];
+
+    const epics: Epic[] = [];
+
+    const warnings = findMissingEpicAssignments(tickets, epics);
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].ticketId).toBe('T001');
+  });
+});
+
+describe('PlanStore epic warnings (T037)', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'plan-epic-test-'));
+    resetEventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true });
+  });
+
+  test('collects epic path warnings during load', async () => {
+    const planContent = `# Test Plan
+
+## Epics
+
+### Epic: missing
+- **Path:** src/does-not-exist
+- **Description:** This path does not exist
+
+## 7. Task Backlog
+
+### Ticket: T001 Test
+- **Priority:** P0
+- **Status:** Todo
+- **Epic:** missing
+`;
+
+    const planPath = join(tempDir, 'PLAN.md');
+    await writeFile(planPath, planContent);
+
+    const store = new PlanStore(planPath);
+    await store.load();
+
+    const warnings = store.getEpicWarnings();
+
+    // Should have a warning about the missing path
+    const pathWarning = warnings.find(w => w.type === 'invalid_path' || w.type === 'missing_path');
+    expect(pathWarning).toBeDefined();
+    expect(pathWarning?.message).toContain('does not exist');
+  });
+
+  test('collects missing epic assignment warnings during load', async () => {
+    const planContent = `# Test Plan
+
+## Epics
+
+### Epic: core
+- **Path:** ${tempDir}
+
+## 7. Task Backlog
+
+### Ticket: T001 No Epic Assigned
+- **Priority:** P0
+- **Status:** Todo
+`;
+
+    const planPath = join(tempDir, 'PLAN.md');
+    await writeFile(planPath, planContent);
+
+    const store = new PlanStore(planPath);
+    await store.load();
+
+    const warnings = store.getEpicWarnings();
+
+    const assignmentWarning = warnings.find(w => w.type === 'missing_assignment');
+    expect(assignmentWarning).toBeDefined();
+    expect(assignmentWarning?.ticketId).toBe('T001');
+  });
+
+  test('collects undefined epic reference warnings during load', async () => {
+    await mkdir(join(tempDir, 'src'));
+
+    const planContent = `# Test Plan
+
+## Epics
+
+### Epic: core
+- **Path:** src
+
+## 7. Task Backlog
+
+### Ticket: T001 Wrong Epic
+- **Priority:** P0
+- **Status:** Todo
+- **Epic:** nonexistent
+`;
+
+    const planPath = join(tempDir, 'PLAN.md');
+    await writeFile(planPath, planContent);
+
+    const store = new PlanStore(planPath);
+    await store.load();
+
+    const warnings = store.getEpicWarnings();
+
+    const undefinedWarning = warnings.find(w => w.type === 'undefined_epic');
+    expect(undefinedWarning).toBeDefined();
+    expect(undefinedWarning?.ticketId).toBe('T001');
+    expect(undefinedWarning?.message).toContain('nonexistent');
+  });
+
+  test('returns empty warnings for valid plan with epics', async () => {
+    await mkdir(join(tempDir, 'src'));
+
+    const planContent = `# Test Plan
+
+## Epics
+
+### Epic: core
+- **Path:** src
+- **Description:** Core module
+
+## 7. Task Backlog
+
+### Ticket: T001 Valid Task
+- **Priority:** P0
+- **Status:** Todo
+- **Epic:** core
+`;
+
+    const planPath = join(tempDir, 'PLAN.md');
+    await writeFile(planPath, planContent);
+
+    const store = new PlanStore(planPath);
+    await store.load();
+
+    const warnings = store.getEpicWarnings();
+
+    expect(warnings).toHaveLength(0);
+  });
+});

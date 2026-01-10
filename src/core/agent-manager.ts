@@ -18,6 +18,8 @@ export interface SpawnOptions {
   model?: string;
   ticket?: Ticket; // Full ticket data for prompt building
   projectPath?: string; // Project root path
+  branch?: string; // Git branch name for commits (e.g., "ticket/T001")
+  epicName?: string; // Epic name for context
 }
 
 export interface AgentOutput {
@@ -75,7 +77,9 @@ export class AgentManager {
       ? buildImplementationPrompt(
           options.ticket,
           options.projectPath || options.workingDirectory,
-          options.workingDirectory
+          options.workingDirectory,
+          options.branch,
+          options.epicName
         )
       : `You are working on ticket ${options.ticketId}. Working directory: ${options.workingDirectory}`;
 
@@ -752,7 +756,9 @@ export function isBlocked(output: string): { blocked: boolean; reason?: string }
 export function buildImplementationPrompt(
   ticket: Ticket,
   projectPath: string,
-  workingDir: string
+  workingDir: string,
+  branch?: string,
+  epicName?: string
 ): string {
   // Format acceptance criteria as bullet points
   const acceptanceCriteria = ticket.acceptanceCriteria
@@ -778,13 +784,29 @@ export function buildImplementationPrompt(
     ? `\n## Previous Feedback\n${ticket.feedback}`
     : '';
 
+  // Build git/branch context section
+  const branchName = branch || `ticket/${ticket.id}`;
+  const gitContext = branch
+    ? `
+## Git Context
+Branch: ${branchName}
+Epic: ${epicName || ticket.epic || 'None'}
+
+IMPORTANT: You are working in a dedicated worktree for this ticket.
+- Before making changes, ensure you are on branch: ${branchName}
+- If not on the correct branch, run: git checkout ${branchName} || git checkout -b ${branchName}
+- All commits should be made to this branch, NOT to main
+- Commit your changes with descriptive messages referencing ticket ${ticket.id}`
+    : '';
+
   return `You are working on ticket ${ticket.id}: ${ticket.title}
 
 ## Context
 Project: ${projectPath}
 Working directory: ${workingDir}
 Priority: ${ticket.priority}
-Epic: ${ticket.epic || 'None'}
+Epic: ${epicName || ticket.epic || 'None'}
+${gitContext}
 
 ## Your Task
 ${ticket.description || ticket.title}
@@ -799,7 +821,7 @@ ${dependencies}${notes}${feedback}
 ## Constraints
 - Only modify files relevant to this ticket
 - Run tests before reporting completion
-- If blocked, output: === TICKET ${ticket.id} BLOCKED: [reason] ===
+${branch ? `- Commit all changes to branch: ${branchName}` : ''}- If blocked, output: === TICKET ${ticket.id} BLOCKED: [reason] ===
 
 ## When Complete
 After all acceptance criteria are met and validation passes, output exactly:

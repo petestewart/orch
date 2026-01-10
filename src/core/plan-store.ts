@@ -23,13 +23,30 @@ export interface ParseError {
   message: string;
 }
 
+export interface EpicWarning {
+  type: 'missing_path' | 'invalid_path' | 'missing_assignment' | 'undefined_epic';
+  epic?: string;
+  ticketId?: string;
+  path?: string;
+  message: string;
+}
+
 export class PlanStore {
   private planPath: string;
   private plan: ParsedPlan | null = null;
   private watcher: unknown = null;
+  private epicWarnings: EpicWarning[] = [];
 
   constructor(planPath: string) {
     this.planPath = planPath;
+  }
+
+  /**
+   * Get epic warnings detected during load()
+   * Includes: missing paths, invalid paths, missing assignments, undefined epics
+   */
+  getEpicWarnings(): EpicWarning[] {
+    return this.epicWarnings;
   }
 
   /**
@@ -71,14 +88,40 @@ export class PlanStore {
       throw new Error(`Parse error at line ${ticketsResult.line}: ${ticketsResult.message}`);
     }
 
-    // Parse epics (basic implementation - returns empty for now, T037 will expand)
+    // Parse epics
     const epics = parseEpics(rawContent);
+    const tickets = ticketsResult as Ticket[];
+
+    // Collect epic warnings
+    this.epicWarnings = [];
+
+    // Validate epic paths
+    const basePath = await import('node:path').then(p => p.dirname(this.planPath));
+    const pathWarnings = await validateEpicPaths(epics, basePath);
+    for (const warning of pathWarnings) {
+      this.epicWarnings.push({
+        type: warning.path ? 'invalid_path' : 'missing_path',
+        epic: warning.epic,
+        path: warning.path || undefined,
+        message: warning.message,
+      });
+    }
+
+    // Check for missing epic assignments
+    const assignmentWarnings = findMissingEpicAssignments(tickets, epics);
+    for (const warning of assignmentWarnings) {
+      this.epicWarnings.push({
+        type: warning.message.includes('undefined epic') ? 'undefined_epic' : 'missing_assignment',
+        ticketId: warning.ticketId,
+        message: warning.message,
+      });
+    }
 
     this.plan = {
       overview,
       definitionOfDone,
       epics,
-      tickets: ticketsResult as Ticket[],
+      tickets,
       rawContent,
     };
 
@@ -638,12 +681,160 @@ export function parseTicket(markdown: string, startLineNumber: number = 1): Tick
 
 /**
  * Parse epic definitions from markdown
- * Basic implementation for T002 - T037 will expand this
+ *
+ * Expected format in PLAN.md:
+ * ## Epics
+ *
+ * ### Epic: core
+ * - **Path:** src/core
+ * - **Description:** Core orchestration logic and utilities
+ *
+ * ### Epic: ui
+ * - **Path:** src/components
+ * - **Description:** UI components and views
  */
 export function parseEpics(markdown: string): Epic[] {
-  // Basic implementation - return empty array
-  // T037 will implement full epic parsing
-  return [];
+  const epics: Epic[] = [];
+
+  // Find the Epics section
+  const epicsSectionMatch = markdown.match(/^##\s*Epics?\s*$/im);
+  if (!epicsSectionMatch) {
+    return epics;
+  }
+
+  // Extract content from Epics section to next major section (## heading)
+  const epicsSectionStart = epicsSectionMatch.index!;
+  const afterEpicsSection = markdown.slice(epicsSectionStart + epicsSectionMatch[0].length);
+  const nextSectionMatch = afterEpicsSection.match(/^##\s+/m);
+  const epicsSectionContent = nextSectionMatch
+    ? afterEpicsSection.slice(0, nextSectionMatch.index)
+    : afterEpicsSection;
+
+  // Parse individual epic definitions: ### Epic: {name}
+  const epicPattern = /^###\s*Epic:\s*(.+)$/gm;
+  const epicMatches: { name: string; startIndex: number }[] = [];
+
+  let match;
+  while ((match = epicPattern.exec(epicsSectionContent)) !== null) {
+    epicMatches.push({
+      name: match[1].trim(),
+      startIndex: match.index,
+    });
+  }
+
+  // Process each epic section
+  for (let i = 0; i < epicMatches.length; i++) {
+    const epicMatch = epicMatches[i];
+    const nextIndex = i + 1 < epicMatches.length
+      ? epicMatches[i + 1].startIndex
+      : epicsSectionContent.length;
+
+    const epicSection = epicsSectionContent.slice(epicMatch.startIndex, nextIndex);
+    const lines = epicSection.split('\n');
+
+    // Parse path (required)
+    const pathResult = parseField(lines, 'Path', 0);
+    const path = (pathResult.value && typeof pathResult.value === 'string')
+      ? pathResult.value
+      : '';
+
+    // Parse description (optional)
+    const descResult = parseField(lines, 'Description', 0);
+    const description = (descResult.value && typeof descResult.value === 'string')
+      ? descResult.value
+      : undefined;
+
+    epics.push({
+      name: epicMatch.name,
+      path,
+      description,
+    });
+  }
+
+  return epics;
+}
+
+/**
+ * Validate that epic paths exist on the filesystem
+ * @param epics - Array of epics to validate
+ * @param basePath - Base path to resolve epic paths against
+ * @returns Array of validation warnings (not errors - epics with missing paths are still valid)
+ */
+export async function validateEpicPaths(
+  epics: Epic[],
+  basePath: string
+): Promise<{ epic: string; path: string; message: string }[]> {
+  const warnings: { epic: string; path: string; message: string }[] = [];
+  const path = await import('node:path');
+  const fs = await import('node:fs');
+
+  for (const epic of epics) {
+    if (!epic.path) {
+      warnings.push({
+        epic: epic.name,
+        path: '',
+        message: `Epic '${epic.name}' has no path defined`,
+      });
+      continue;
+    }
+
+    const fullPath = path.resolve(basePath, epic.path);
+    try {
+      const stats = fs.statSync(fullPath);
+      if (!stats.isDirectory()) {
+        warnings.push({
+          epic: epic.name,
+          path: epic.path,
+          message: `Epic '${epic.name}' path '${epic.path}' exists but is not a directory`,
+        });
+      }
+    } catch {
+      warnings.push({
+        epic: epic.name,
+        path: epic.path,
+        message: `Epic '${epic.name}' path '${epic.path}' does not exist`,
+      });
+    }
+  }
+
+  return warnings;
+}
+
+/**
+ * Find tickets with missing epic assignments
+ * @param tickets - Array of tickets to check
+ * @param epics - Array of defined epics
+ * @returns Array of warnings about missing or invalid epic assignments
+ */
+export function findMissingEpicAssignments(
+  tickets: Ticket[],
+  epics: Epic[]
+): { ticketId: string; message: string }[] {
+  const warnings: { ticketId: string; message: string }[] = [];
+  const epicNames = new Set(epics.map(e => e.name));
+
+  for (const ticket of tickets) {
+    // Only check tickets that are not Done
+    if (ticket.status === 'Done') {
+      continue;
+    }
+
+    if (!ticket.epic) {
+      // No epic assigned - this is a warning
+      warnings.push({
+        ticketId: ticket.id,
+        message: `Ticket ${ticket.id} has no epic assigned`,
+      });
+    } else if (epics.length > 0 && !epicNames.has(ticket.epic)) {
+      // Epic assigned but doesn't match any defined epic
+      warnings.push({
+        ticketId: ticket.id,
+        message: `Ticket ${ticket.id} references undefined epic '${ticket.epic}'`,
+      });
+    }
+  }
+
+  return warnings;
 }
 
 /**

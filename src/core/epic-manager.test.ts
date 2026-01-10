@@ -1,13 +1,23 @@
 /**
  * Unit tests for EpicManager
- * Implements: T031 validation
+ * Implements: T031, T032 validation
  */
 
 import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { EpicManager, createWorktree, listWorktrees } from './epic-manager';
+import {
+  EpicManager,
+  createWorktree,
+  listWorktrees,
+  removeWorktree,
+  mergeBranch,
+  getCurrentBranch,
+  abortMerge,
+  isMergeInProgress,
+  completeMergeAfterConflictResolution,
+} from './epic-manager';
 import { resetEventBus, getEventBus } from './events';
 import type { Ticket, Epic, OrchEvent } from './types';
-import { mkdirSync, rmSync, existsSync } from 'fs';
+import { mkdirSync, rmSync, existsSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 
@@ -531,6 +541,397 @@ describe('Git Operations', () => {
       // Cleanup
       const removeProc = Bun.spawn(['git', 'worktree', 'remove', worktreePath1], { cwd: tempDir });
       await removeProc.exited;
+    });
+  });
+
+  describe('removeWorktree', () => {
+    test('removes an existing worktree', async () => {
+      const worktreePath = join(tempDir, '..', `test-worktree-remove-${Date.now()}`);
+
+      // Create a worktree
+      await createWorktree(tempDir, worktreePath, 'remove-test-branch');
+      expect(existsSync(worktreePath)).toBe(true);
+
+      // Remove it
+      await removeWorktree(worktreePath);
+      expect(existsSync(worktreePath)).toBe(false);
+    });
+
+    test('throws error for non-existent worktree', async () => {
+      await expect(removeWorktree('/nonexistent/worktree'))
+        .rejects.toThrow();
+    });
+  });
+
+  describe('getCurrentBranch', () => {
+    test('returns main branch for clean repo', async () => {
+      const branch = await getCurrentBranch(tempDir);
+      expect(['main', 'master']).toContain(branch);
+    });
+
+    test('returns branch name after checkout', async () => {
+      // Create and checkout a new branch
+      const branchProc = Bun.spawn(['git', 'checkout', '-b', 'test-branch-getcurrent'], { cwd: tempDir });
+      await branchProc.exited;
+
+      const branch = await getCurrentBranch(tempDir);
+      expect(branch).toBe('test-branch-getcurrent');
+
+      // Cleanup - checkout back
+      const checkoutProc = Bun.spawn(['git', 'checkout', '-'], { cwd: tempDir });
+      await checkoutProc.exited;
+    });
+  });
+
+  describe('mergeBranch', () => {
+    test('merges clean branch successfully', async () => {
+      // Create a feature branch
+      const branchProc = Bun.spawn(['git', 'checkout', '-b', 'feature-clean'], { cwd: tempDir });
+      await branchProc.exited;
+
+      // Make a change
+      writeFileSync(join(tempDir, 'feature.txt'), 'feature content');
+      const addProc = Bun.spawn(['git', 'add', '.'], { cwd: tempDir });
+      await addProc.exited;
+      const commitProc = Bun.spawn(['git', 'commit', '-m', 'Add feature'], { cwd: tempDir });
+      await commitProc.exited;
+
+      // Get the main branch name
+      const checkoutMainProc = Bun.spawn(['git', 'checkout', '-'], { cwd: tempDir });
+      await checkoutMainProc.exited;
+      const mainBranch = await getCurrentBranch(tempDir);
+
+      // Merge
+      const result = await mergeBranch(tempDir, 'feature-clean', mainBranch);
+
+      expect(result.success).toBe(true);
+      expect(result.hasConflicts).toBe(false);
+      expect(result.mergedCommit).toBeDefined();
+      expect(existsSync(join(tempDir, 'feature.txt'))).toBe(true);
+    });
+
+    test('detects merge conflicts', async () => {
+      // Get the main branch
+      const mainBranch = await getCurrentBranch(tempDir);
+
+      // Create conflicting content on main
+      writeFileSync(join(tempDir, 'conflict.txt'), 'main content');
+      let addProc = Bun.spawn(['git', 'add', '.'], { cwd: tempDir });
+      await addProc.exited;
+      let commitProc = Bun.spawn(['git', 'commit', '-m', 'Main change'], { cwd: tempDir });
+      await commitProc.exited;
+
+      // Create feature branch from before the change
+      const branchProc = Bun.spawn(['git', 'checkout', '-b', 'feature-conflict', 'HEAD~1'], { cwd: tempDir });
+      await branchProc.exited;
+
+      // Make conflicting change on feature
+      writeFileSync(join(tempDir, 'conflict.txt'), 'feature content');
+      addProc = Bun.spawn(['git', 'add', '.'], { cwd: tempDir });
+      await addProc.exited;
+      commitProc = Bun.spawn(['git', 'commit', '-m', 'Feature change'], { cwd: tempDir });
+      await commitProc.exited;
+
+      // Go back to main
+      const checkoutProc = Bun.spawn(['git', 'checkout', mainBranch], { cwd: tempDir });
+      await checkoutProc.exited;
+
+      // Attempt merge
+      const result = await mergeBranch(tempDir, 'feature-conflict', mainBranch);
+
+      expect(result.success).toBe(false);
+      expect(result.hasConflicts).toBe(true);
+      expect(result.conflictFiles).toContain('conflict.txt');
+
+      // Cleanup - abort merge
+      await abortMerge(tempDir);
+    });
+  });
+
+  describe('isMergeInProgress', () => {
+    test('returns false when no merge in progress', async () => {
+      const result = await isMergeInProgress(tempDir);
+      expect(result).toBe(false);
+    });
+
+    test('returns true during merge conflict', async () => {
+      // Get the main branch
+      const mainBranch = await getCurrentBranch(tempDir);
+
+      // Create conflicting content
+      writeFileSync(join(tempDir, 'merge-check.txt'), 'main');
+      let addProc = Bun.spawn(['git', 'add', '.'], { cwd: tempDir });
+      await addProc.exited;
+      let commitProc = Bun.spawn(['git', 'commit', '-m', 'Main'], { cwd: tempDir });
+      await commitProc.exited;
+
+      // Create feature branch
+      const branchProc = Bun.spawn(['git', 'checkout', '-b', 'feature-merge-check', 'HEAD~1'], { cwd: tempDir });
+      await branchProc.exited;
+
+      writeFileSync(join(tempDir, 'merge-check.txt'), 'feature');
+      addProc = Bun.spawn(['git', 'add', '.'], { cwd: tempDir });
+      await addProc.exited;
+      commitProc = Bun.spawn(['git', 'commit', '-m', 'Feature'], { cwd: tempDir });
+      await commitProc.exited;
+
+      // Go back and try merge
+      const checkoutProc = Bun.spawn(['git', 'checkout', mainBranch], { cwd: tempDir });
+      await checkoutProc.exited;
+
+      // Start conflicting merge
+      const mergeProc = Bun.spawn(['git', 'merge', 'feature-merge-check'], {
+        cwd: tempDir,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      await mergeProc.exited;
+
+      const inProgress = await isMergeInProgress(tempDir);
+      expect(inProgress).toBe(true);
+
+      // Cleanup
+      await abortMerge(tempDir);
+    });
+  });
+
+  describe('completeMergeAfterConflictResolution', () => {
+    test('throws when no merge in progress', async () => {
+      await expect(completeMergeAfterConflictResolution(tempDir))
+        .rejects.toThrow('No merge in progress');
+    });
+
+    test('completes merge after resolving conflicts', async () => {
+      // Get the main branch
+      const mainBranch = await getCurrentBranch(tempDir);
+
+      // Create conflicting content
+      writeFileSync(join(tempDir, 'complete-test.txt'), 'main');
+      let addProc = Bun.spawn(['git', 'add', '.'], { cwd: tempDir });
+      await addProc.exited;
+      let commitProc = Bun.spawn(['git', 'commit', '-m', 'Main complete'], { cwd: tempDir });
+      await commitProc.exited;
+
+      // Create feature branch
+      const branchProc = Bun.spawn(['git', 'checkout', '-b', 'feature-complete', 'HEAD~1'], { cwd: tempDir });
+      await branchProc.exited;
+
+      writeFileSync(join(tempDir, 'complete-test.txt'), 'feature');
+      addProc = Bun.spawn(['git', 'add', '.'], { cwd: tempDir });
+      await addProc.exited;
+      commitProc = Bun.spawn(['git', 'commit', '-m', 'Feature complete'], { cwd: tempDir });
+      await commitProc.exited;
+
+      // Go back and start merge
+      const checkoutProc = Bun.spawn(['git', 'checkout', mainBranch], { cwd: tempDir });
+      await checkoutProc.exited;
+
+      const mergeProc = Bun.spawn(['git', 'merge', 'feature-complete'], {
+        cwd: tempDir,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      await mergeProc.exited;
+
+      // Manually resolve conflict
+      writeFileSync(join(tempDir, 'complete-test.txt'), 'resolved');
+      addProc = Bun.spawn(['git', 'add', '.'], { cwd: tempDir });
+      await addProc.exited;
+
+      // Complete the merge
+      const result = await completeMergeAfterConflictResolution(tempDir);
+
+      expect(result.success).toBe(true);
+      expect(result.hasConflicts).toBe(false);
+      expect(result.mergedCommit).toBeDefined();
+    });
+  });
+});
+
+describe('EpicManager Merge Operations', () => {
+  let tempDir: string;
+  let manager: EpicManager;
+
+  beforeEach(async () => {
+    // Create a temporary git repo for testing
+    tempDir = join(tmpdir(), `orch-merge-test-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+    mkdirSync(join(tempDir, 'core'), { recursive: true });
+
+    // Initialize git repo
+    const initProc = Bun.spawn(['git', 'init'], { cwd: tempDir });
+    await initProc.exited;
+    const configProc1 = Bun.spawn(['git', 'config', 'user.email', 'test@test.com'], { cwd: tempDir });
+    await configProc1.exited;
+    const configProc2 = Bun.spawn(['git', 'config', 'user.name', 'Test'], { cwd: tempDir });
+    await configProc2.exited;
+
+    // Create initial commit
+    writeFileSync(join(tempDir, 'README.md'), '# Test');
+    const addProc = Bun.spawn(['git', 'add', '.'], { cwd: tempDir });
+    await addProc.exited;
+    const commitProc = Bun.spawn(['git', 'commit', '-m', 'Initial commit'], { cwd: tempDir });
+    await commitProc.exited;
+
+    manager = new EpicManager(tempDir);
+    await manager.initialize([{ name: 'core', path: 'core' }]);
+    resetEventBus();
+  });
+
+  afterEach(async () => {
+    // Clean up worktrees first
+    const worktrees = await listWorktrees(tempDir);
+    for (const wt of worktrees) {
+      if (wt !== tempDir) {
+        try {
+          await removeWorktree(wt, true);
+        } catch {
+          // Ignore errors during cleanup
+        }
+      }
+    }
+
+    // Clean up temp directory
+    if (existsSync(tempDir)) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  describe('mergeWorktree', () => {
+    test('throws for untracked worktree', async () => {
+      await expect(manager.mergeWorktree('/nonexistent/path'))
+        .rejects.toThrow('Worktree not tracked');
+    });
+
+    test('emits epic:worktree-merged on success', async () => {
+      const ticket = createTicket({ id: 'T001', epic: 'core' });
+      await manager.allocateWorktree(ticket, 'agent-1');
+
+      // Create a second worktree to test merge
+      const ticket2 = createTicket({ id: 'T002', epic: 'core' });
+      const allocation = await manager.allocateWorktree(ticket2, 'agent-2');
+
+      // Make a change in the worktree
+      writeFileSync(join(allocation.worktreePath, 'test.txt'), 'test');
+      let addProc = Bun.spawn(['git', 'add', '.'], { cwd: allocation.worktreePath });
+      await addProc.exited;
+      let commitProc = Bun.spawn(['git', 'commit', '-m', 'Test change'], { cwd: allocation.worktreePath });
+      await commitProc.exited;
+
+      // Track events
+      const events: OrchEvent[] = [];
+      getEventBus().subscribe('epic:worktree-merged', (event) => {
+        events.push(event);
+      });
+
+      // Get main branch name
+      const mainBranch = await getCurrentBranch(tempDir);
+
+      // Merge the worktree
+      const result = await manager.mergeWorktree(allocation.worktreePath, mainBranch);
+
+      expect(result.success).toBe(true);
+      expect(events.length).toBe(1);
+      expect(events[0].type).toBe('epic:worktree-merged');
+    });
+
+    test('emits epic:conflict on merge conflict', async () => {
+      const mainBranch = await getCurrentBranch(tempDir);
+
+      // First, create a file that will be conflicted
+      writeFileSync(join(tempDir, 'conflict-file.txt'), 'initial content');
+      let addProc = Bun.spawn(['git', 'add', '.'], { cwd: tempDir });
+      await addProc.exited;
+      let commitProc = Bun.spawn(['git', 'commit', '-m', 'Initial conflict file'], { cwd: tempDir });
+      await commitProc.exited;
+
+      // Allocate first worktree (uses main epic dir)
+      const ticket1 = createTicket({ id: 'T001', epic: 'core' });
+      await manager.allocateWorktree(ticket1, 'agent-1');
+
+      // Allocate second worktree - this branches from current HEAD
+      const ticket2 = createTicket({ id: 'T002', epic: 'core' });
+      const allocation = await manager.allocateWorktree(ticket2, 'agent-2');
+
+      // Make a change in the worktree first
+      writeFileSync(join(allocation.worktreePath, 'conflict-file.txt'), 'worktree content');
+      addProc = Bun.spawn(['git', 'add', '.'], { cwd: allocation.worktreePath });
+      await addProc.exited;
+      commitProc = Bun.spawn(['git', 'commit', '-m', 'Worktree conflict'], { cwd: allocation.worktreePath });
+      await commitProc.exited;
+
+      // Now create conflicting change on main
+      writeFileSync(join(tempDir, 'conflict-file.txt'), 'main content');
+      addProc = Bun.spawn(['git', 'add', '.'], { cwd: tempDir });
+      await addProc.exited;
+      commitProc = Bun.spawn(['git', 'commit', '-m', 'Main conflict'], { cwd: tempDir });
+      await commitProc.exited;
+
+      // Track events
+      const events: OrchEvent[] = [];
+      getEventBus().subscribe('epic:conflict', (event) => {
+        events.push(event);
+      });
+
+      // Attempt merge
+      const result = await manager.mergeWorktree(allocation.worktreePath, mainBranch);
+
+      expect(result.success).toBe(false);
+      expect(result.hasConflicts).toBe(true);
+      expect(events.length).toBe(1);
+      expect(events[0].type).toBe('epic:conflict');
+
+      // Cleanup
+      await abortMerge(tempDir);
+    });
+  });
+
+  describe('cleanupWorktree', () => {
+    test('removes worktree and updates tracking', async () => {
+      // Create worktrees
+      const ticket1 = createTicket({ id: 'T001', epic: 'core' });
+      await manager.allocateWorktree(ticket1, 'agent-1');
+
+      const ticket2 = createTicket({ id: 'T002', epic: 'core' });
+      const allocation = await manager.allocateWorktree(ticket2, 'agent-2');
+
+      expect(manager.getWorktreeByPath(allocation.worktreePath)).toBeDefined();
+
+      // Cleanup the worktree
+      await manager.cleanupWorktree(allocation.worktreePath);
+
+      expect(manager.getWorktreeByPath(allocation.worktreePath)).toBeUndefined();
+      expect(existsSync(allocation.worktreePath)).toBe(false);
+    });
+  });
+
+  describe('getWorktreeByPath', () => {
+    test('finds tracked worktree by path', async () => {
+      const ticket = createTicket({ id: 'T001', epic: 'core' });
+      const allocation = await manager.allocateWorktree(ticket, 'agent-1');
+
+      const worktree = manager.getWorktreeByPath(allocation.worktreePath);
+      expect(worktree).toBeDefined();
+      expect(worktree?.ticketId).toBe('T001');
+    });
+
+    test('returns undefined for unknown path', () => {
+      expect(manager.getWorktreeByPath('/unknown/path')).toBeUndefined();
+    });
+  });
+
+  describe('getWorktreeByTicketId', () => {
+    test('finds tracked worktree by ticket ID', async () => {
+      const ticket = createTicket({ id: 'T001', epic: 'core' });
+      await manager.allocateWorktree(ticket, 'agent-1');
+
+      const worktree = manager.getWorktreeByTicketId('T001');
+      expect(worktree).toBeDefined();
+      expect(worktree?.agentId).toBe('agent-1');
+    });
+
+    test('returns undefined for unknown ticket ID', () => {
+      expect(manager.getWorktreeByTicketId('UNKNOWN')).toBeUndefined();
     });
   });
 });

@@ -43,6 +43,9 @@ orch/
 | `epic-manager.ts` | Manages git worktrees for parallel agent work on same epic |
 | `config.ts` | Loads .orchrc or orch.config.json, env var overrides |
 | `validation-runner.ts` | Executes ticket validation commands with timeout |
+| `review-agent.ts` | Review agent for automated code review |
+| `qa-agent.ts` | QA agent for automated testing |
+| `status-pipeline.ts` | Status transition validation and pipeline logic |
 
 ## Commands
 
@@ -50,7 +53,7 @@ orch/
 # Run the TUI
 bun run src/index.ts
 
-# Run tests (269 tests)
+# Run tests (535 tests)
 bun test
 
 # Type check
@@ -81,11 +84,19 @@ Agents signal completion/blockers via markers in their output:
 
 ## Current Implementation Status
 
-**Done (12 tickets):** T001, T002, T003, T004, T005, T006, T007, T009, T017, T022, T030, T031
+**Done (19 tickets):** T001, T002, T003, T004, T005, T006, T007, T008, T009, T017, T022, T026, T027, T028, T030, T031, T032, T033, T037
 
-**Remaining P0:** T008 (Orchestrator Core Loop), T026 (Review Agent), T027 (QA Agent), T028 (Status Pipeline), T032 (Worktree Merge), T033 (Epic-Aware Spawning), T037 (Epic Parsing)
+**All P0 tickets complete.** Core orchestration infrastructure is fully implemented:
+- Event bus, plan parsing, dependency graph
+- Agent spawning, output parsing, validation
+- Orchestrator core loop with auto-assignment
+- Review and QA agents with automation modes
+- Status pipeline with transition validation
+- Epic/worktree management with merge handling
 
-**Note:** TUI currently uses mock data. T008 will connect real orchestration to the UI.
+**Remaining P1:** T010 (Refactor State Store), T011-T016 (UI connections), T023-T024 (Tests), T029 (Human Intervention UI), T034-T036 (Epic grouping, AI-assisted tickets), T038 (Plan Audit)
+
+**Note:** TUI currently uses mock data. T010 will connect real orchestration state to the UI.
 
 ## Testing
 

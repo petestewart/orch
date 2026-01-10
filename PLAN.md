@@ -389,8 +389,8 @@ After all acceptance criteria are met, output exactly:
 
 ### Ticket: T008 Orchestrator Core Loop
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Main orchestration logic that ties everything together. React to events, schedule work, manage ticket state transitions.
 - **Acceptance Criteria:**
   - On startup: load plan, compute ready tickets
@@ -404,6 +404,20 @@ After all acceptance criteria are met, output exactly:
   - Integration test: end-to-end ticket completion
   - Test: priority ordering respected
 - **Notes:**
+  - Orchestrator notes:
+    - Intended approach: Implement start/stop/tick methods, subscribe to agent events, wire up dependency graph from plan store
+    - Key constraints: Must integrate with existing DependencyGraph, AgentManager, EpicManager, and PlanStore classes
+    - Dependencies: T001 (events), T003 (plan writes), T004 (dependency graph), T007 (agent manager) - all done
+    - Estimated complexity: complex
+  - Implementation complete:
+    - start(): Loads plan, builds dependency graph, subscribes to agent events
+    - stop(): Unsubscribes from events, stops all agents
+    - getReadyTickets(): Delegates to DependencyGraph with priority sorting
+    - assignTicket(): Verifies readiness, allocates worktree, spawns agent, updates status
+    - handleAgentComplete(): Runs validation, advances or fails ticket
+    - tick(): Auto-assigns ready tickets in automatic mode
+    - Event handlers for agent:completed, agent:failed, agent:blocked
+    - 41 unit tests passing, typecheck passes
 - **Dependencies:** T001, T003, T004, T007
 
 ### Ticket: T009 Validation Runner
@@ -716,8 +730,8 @@ After all acceptance criteria are met, output exactly:
 
 ### Ticket: T026 Review Agent Implementation
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Create the Review Agent that performs automated code review when tickets enter the Review lane.
 - **Acceptance Criteria:**
   - Spawns automatically when ticket enters Review status (if automation.review.mode is "automatic")
@@ -734,13 +748,13 @@ After all acceptance criteria are met, output exactly:
   - Unit test: review prompt generation
   - Integration test: ticket flows from Review → QA on approval
   - Integration test: ticket flows from Review → In Progress on rejection
-- **Notes:**
+- **Notes:** Implemented ReviewAgent class with: spawnReviewAgent(), parseReviewDecision(), automation mode support. Integrated with Orchestrator to auto-spawn on Review status. Added getTicketDiff() to epic-manager. 535 tests pass.
 - **Dependencies:** T007, T017, T003
 
 ### Ticket: T027 QA Agent Implementation
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Create the QA Agent that performs automated testing when tickets enter the QA lane.
 - **Acceptance Criteria:**
   - Spawns automatically when ticket enters QA status (if automation.qa.mode is "automatic")
@@ -758,13 +772,13 @@ After all acceptance criteria are met, output exactly:
   - Unit test: QA prompt generation
   - Integration test: ticket flows from QA → Done on pass
   - Integration test: ticket flows from QA → In Progress on fail
-- **Notes:**
+- **Notes:** Implementation complete. QAAgent class with startQA(), parseQAOutput(), handleQAComplete() methods. parseQADecision() extracts PASSED/FAILED decisions and test results from agent output. buildQAPromptFromTemplate() creates prompts from template. 25 unit tests passing.
 - **Dependencies:** T007, T017, T003
 
 ### Ticket: T028 Ticket Status Pipeline
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Implement the full ticket status pipeline with transitions and automatic progression.
 - **Acceptance Criteria:**
   - Status enum: Todo, InProgress, Review, QA, Done, Failed
@@ -782,6 +796,20 @@ After all acceptance criteria are met, output exactly:
   - Unit test: invalid transitions blocked
   - Integration test: full pipeline from Todo to Done
 - **Notes:**
+  - Agent-T028 implementation complete:
+    - Created src/core/status-pipeline.ts with full transition validation logic
+    - Status pipeline: Todo->InProgress->Review->QA->Done, with Failed as special state
+    - isValidTransition(from, to) validates any status transition
+    - getNextStatus(current, config?) returns next status based on automation config
+    - getPreviousStatus(current) returns rejection target (always Todo for Review/QA)
+    - canAdvance/canReject/canRetry helper functions for UI state
+    - assertValidTransition throws with helpful error for invalid transitions
+    - getStatusActions() returns available actions for 'a'/'r' key handling
+    - sortStatusesByOrder() for consistent status ordering (Failed first)
+    - Updated Orchestrator to use pipeline validation in advanceTicket/rejectTicket/retryTicket
+    - All methods now emit ticket:status-changed events
+    - 114 new status-pipeline tests + 41 orchestrator tests passing (155 total)
+    - typecheck passes
 - **Dependencies:** T003, T008
 
 ### Ticket: T029 Human Intervention UI
@@ -854,8 +882,8 @@ After all acceptance criteria are met, output exactly:
 
 ### Ticket: T032 Worktree Merge Handler
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Handle merging completed worktrees back to epic main branch.
 - **Acceptance Criteria:**
   - Attempts merge when ticket passes QA
@@ -869,12 +897,23 @@ After all acceptance criteria are met, output exactly:
   - Integration test: clean merge succeeds
   - Integration test: conflict detected and reported
 - **Notes:**
+  - Agent-T032 implementation complete:
+    - mergeWorktree(): Merges worktree branch to target branch, emits epic:worktree-merged or epic:conflict
+    - cleanupWorktree(): Removes worktree from git and updates tracking
+    - cleanupStaleWorktrees(): Removes worktrees older than threshold
+    - retryMerge(): Completes merge after manual conflict resolution (for 'm' key UI action)
+    - getWorktreeByPath(), getWorktreeByTicketId(): Helper methods for finding worktrees
+    - mergeBranch(): Git merge with conflict detection
+    - removeWorktree(): Git worktree removal with optional force flag
+    - getCurrentBranch(), abortMerge(), isMergeInProgress(), completeMergeAfterConflictResolution()
+    - 49 epic-manager tests (13 new tests for T032), all passing
+    - typecheck passes
 - **Dependencies:** T031
 
 ### Ticket: T033 Epic-Aware Agent Spawning
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Update agent spawning to work within epic worktrees.
 - **Acceptance Criteria:**
   - Agent receives working directory from Epic Manager
@@ -887,6 +926,13 @@ After all acceptance criteria are met, output exactly:
   - Manual test: agent works in correct directory
   - Manual test: changes committed to correct branch
 - **Notes:**
+  - Implementation complete:
+    - Updated SpawnOptions to include `branch` and `epicName` parameters
+    - Updated buildImplementationPrompt() to include Git Context section when branch is provided
+    - Git Context includes branch name, epic name, checkout instructions, and commit guidelines
+    - Updated orchestrator.assignTicket() to pass branch and epicName from EpicManager allocation
+    - Added 5 new unit tests for epic-aware prompt generation
+    - All 429 tests pass, typecheck passes
 - **Dependencies:** T007, T031
 
 ### Ticket: T034 Kanban Epic Grouping
@@ -971,8 +1017,8 @@ After all acceptance criteria are met, output exactly:
 
 ### Ticket: T037 Plan Parser Epic Support
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Update plan parser to handle epic field on tickets and epic definitions.
 - **Acceptance Criteria:**
   - Parses `- Epic: {epic-name}` field on tickets
@@ -985,6 +1031,15 @@ After all acceptance criteria are met, output exactly:
   - Unit test: parse tickets with epic field
   - Unit test: parse epic definitions
 - **Notes:**
+  - Agent-T037 implementation complete:
+    - parseEpics() parses ## Epics section with ### Epic: {name} format
+    - Epic fields: name, path, description
+    - validateEpicPaths() checks filesystem for epic directories
+    - findMissingEpicAssignments() finds tickets without epic or with undefined epic
+    - PlanStore.getEpicWarnings() returns all epic-related warnings after load()
+    - Added EpicWarning interface with types: missing_path, invalid_path, missing_assignment, undefined_epic
+    - 22 new T037 tests added (68 total plan-store tests passing)
+    - typecheck passes
 - **Dependencies:** T002
 
 ## 8. Open Questions

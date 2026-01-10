@@ -23,7 +23,10 @@ export {
 } from './agent-manager';
 
 // Orchestration
-export { Orchestrator, DependencyGraph, runValidationStep } from './orchestrator';
+export { Orchestrator, DependencyGraph } from './orchestrator';
+
+// Validation
+export { runValidation, runValidationStep, parseValidationSteps, formatValidationResult } from './validation-runner';
 
 // Epic/Worktree management
 export {
@@ -36,7 +39,7 @@ export {
 } from './epic-manager';
 
 // Specialized agents
-export { ReviewAgent, buildReviewPromptFromTemplate, parseReviewDecision } from './review-agent';
+export { ReviewAgent, parseReviewDecision, isApproved, isChangesRequested, formatReviewFeedback } from './review-agent';
 export { QAAgent, buildQAPromptFromTemplate, parseQADecision } from './qa-agent';
 
 // Configuration

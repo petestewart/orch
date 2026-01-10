@@ -173,6 +173,126 @@ describe('buildImplementationPrompt', () => {
 
     expect(prompt).toContain('## Your Task\nTitle Only');
   });
+
+  // T033: Epic-Aware Agent Spawning tests
+  test('includes branch context when branch is provided', () => {
+    const ticket: Ticket = {
+      id: 'T005',
+      title: 'Epic-Aware Ticket',
+      priority: 'P0',
+      status: 'InProgress',
+      epic: 'core-feature',
+      dependencies: [],
+      acceptanceCriteria: ['Criterion 1'],
+      validationSteps: ['Step 1'],
+    };
+
+    const prompt = buildImplementationPrompt(
+      ticket,
+      '/project',
+      '/project/core-feature-worktree',
+      'ticket/T005',
+      'core-feature'
+    );
+
+    // Should include Git Context section
+    expect(prompt).toContain('## Git Context');
+    expect(prompt).toContain('Branch: ticket/T005');
+    expect(prompt).toContain('working in a dedicated worktree');
+    expect(prompt).toContain('git checkout ticket/T005');
+    expect(prompt).toContain('NOT to main');
+    expect(prompt).toContain('Commit all changes to branch: ticket/T005');
+  });
+
+  test('includes epic name in context when provided', () => {
+    const ticket: Ticket = {
+      id: 'T006',
+      title: 'Epic Context Test',
+      priority: 'P1',
+      status: 'InProgress',
+      dependencies: [],
+      acceptanceCriteria: ['Test epic context'],
+      validationSteps: ['Verify epic'],
+    };
+
+    const prompt = buildImplementationPrompt(
+      ticket,
+      '/project',
+      '/project/ui-worktree',
+      'ticket/T006',
+      'ui-components'
+    );
+
+    expect(prompt).toContain('Epic: ui-components');
+  });
+
+  test('does not include git context when branch is not provided', () => {
+    const ticket: Ticket = {
+      id: 'T007',
+      title: 'No Branch Ticket',
+      priority: 'P1',
+      status: 'InProgress',
+      dependencies: [],
+      acceptanceCriteria: ['Works without branch'],
+      validationSteps: ['Step'],
+    };
+
+    const prompt = buildImplementationPrompt(ticket, '/project', '/project');
+
+    // Should not include Git Context section
+    expect(prompt).not.toContain('## Git Context');
+    expect(prompt).not.toContain('working in a dedicated worktree');
+    expect(prompt).not.toContain('Commit all changes to branch:');
+  });
+
+  test('uses ticket epic when epicName parameter not provided', () => {
+    const ticket: Ticket = {
+      id: 'T008',
+      title: 'Ticket Epic Fallback',
+      priority: 'P0',
+      status: 'InProgress',
+      epic: 'backend-services',
+      dependencies: [],
+      acceptanceCriteria: ['Test'],
+      validationSteps: ['Step'],
+    };
+
+    const prompt = buildImplementationPrompt(
+      ticket,
+      '/project',
+      '/project/worktree',
+      'ticket/T008'
+      // epicName not provided
+    );
+
+    // Should fall back to ticket.epic
+    expect(prompt).toContain('Epic: backend-services');
+  });
+
+  test('branch name defaults to ticket/{id} format in git context', () => {
+    const ticket: Ticket = {
+      id: 'T009',
+      title: 'Custom Branch Test',
+      priority: 'P1',
+      status: 'InProgress',
+      dependencies: [],
+      acceptanceCriteria: ['Test'],
+      validationSteps: ['Step'],
+    };
+
+    const prompt = buildImplementationPrompt(
+      ticket,
+      '/project',
+      '/project/worktree',
+      'feature/custom-branch',
+      'my-epic'
+    );
+
+    // Should use the custom branch name
+    expect(prompt).toContain('Branch: feature/custom-branch');
+    expect(prompt).toContain('git checkout feature/custom-branch');
+    expect(prompt).toContain('Commit all changes to branch: feature/custom-branch');
+  });
 });
 
 describe('isComplete', () => {
