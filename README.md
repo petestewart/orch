@@ -102,17 +102,37 @@ ORCH expects a `PLAN.md` file in your project root. See `examples/sample-plan.md
 # Type check
 bun run typecheck
 
-# Run tests
+# Run tests (269 tests)
 bun test
 
 # Build
 bun run build
+
+# Run directly
+bun run src/index.ts --help
 ```
+
+## Implementation Status
+
+**Core infrastructure complete (12/38 tickets):**
+- Event bus, plan parsing/writing, dependency graph
+- Agent spawning with output parsing
+- Configuration system with env overrides
+- Validation runner, CLI entry point
+- Epic manager with git worktree support
+- Review/QA prompt templates
+
+**In progress:**
+- Orchestrator core loop (connecting UI to real data)
+- Review and QA agent implementations
+
+See [PLAN.md](./PLAN.md) for detailed ticket status.
 
 ## Documentation
 
 - [PRD.md](./PRD.md) - Full product requirements
 - [PLAN.md](./PLAN.md) - Implementation tickets
+- [CLAUDE.md](./CLAUDE.md) - Guide for AI assistants working on this project
 
 ## License
 
