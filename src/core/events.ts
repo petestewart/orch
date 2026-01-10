@@ -17,11 +17,13 @@ type EventHandler<T extends OrchEvent = OrchEvent> = (event: T) => void;
 
 export class EventBus {
   private handlers: Map<EventType, Set<EventHandler>>;
+  private allHandlers: Set<EventHandler>;
   private history: OrchEvent[];
   private maxHistory: number;
 
   constructor(maxHistory = 1000) {
     this.handlers = new Map();
+    this.allHandlers = new Set();
     this.history = [];
     this.maxHistory = maxHistory;
   }
@@ -34,8 +36,28 @@ export class EventBus {
     type: EventType,
     handler: EventHandler<T>
   ): () => void {
-    // TODO: Implement - T001
-    throw new Error('Not implemented');
+    // Get or create the handler set for this event type
+    let handlers = this.handlers.get(type);
+    if (!handlers) {
+      handlers = new Set();
+      this.handlers.set(type, handlers);
+    }
+
+    // Add the handler (cast to generic EventHandler for storage)
+    const genericHandler = handler as EventHandler;
+    handlers.add(genericHandler);
+
+    // Return unsubscribe function
+    return () => {
+      const currentHandlers = this.handlers.get(type);
+      if (currentHandlers) {
+        currentHandlers.delete(genericHandler);
+        // Clean up empty sets
+        if (currentHandlers.size === 0) {
+          this.handlers.delete(type);
+        }
+      }
+    };
   }
 
   /**
@@ -43,8 +65,12 @@ export class EventBus {
    * @returns Unsubscribe function
    */
   subscribeAll(handler: EventHandler): () => void {
-    // TODO: Implement - T001
-    throw new Error('Not implemented');
+    this.allHandlers.add(handler);
+
+    // Return unsubscribe function
+    return () => {
+      this.allHandlers.delete(handler);
+    };
   }
 
   /**
@@ -52,8 +78,24 @@ export class EventBus {
    * Handlers are called synchronously in subscription order
    */
   publish(event: OrchEvent): void {
-    // TODO: Implement - T001
-    throw new Error('Not implemented');
+    // Add to history (circular buffer - remove oldest if at max)
+    if (this.history.length >= this.maxHistory) {
+      this.history.shift();
+    }
+    this.history.push(event);
+
+    // Call type-specific handlers first (in insertion order - Set maintains this)
+    const typeHandlers = this.handlers.get(event.type);
+    if (typeHandlers) {
+      for (const handler of typeHandlers) {
+        handler(event);
+      }
+    }
+
+    // Then call "all" handlers (in insertion order)
+    for (const handler of this.allHandlers) {
+      handler(event);
+    }
   }
 
   /**
@@ -61,8 +103,11 @@ export class EventBus {
    * @param filter Optional event type filter
    */
   getHistory(filter?: EventType): OrchEvent[] {
-    // TODO: Implement - T001
-    throw new Error('Not implemented');
+    if (filter) {
+      return this.history.filter((event) => event.type === filter);
+    }
+    // Return a copy to prevent external mutation
+    return [...this.history];
   }
 
   /**
@@ -70,6 +115,7 @@ export class EventBus {
    */
   clear(): void {
     this.handlers.clear();
+    this.allHandlers.clear();
     this.history = [];
   }
 }

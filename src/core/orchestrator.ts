@@ -6,7 +6,7 @@
  * Implements: T004, T008, T009, T028
  */
 
-import type { Ticket, TicketStatus, Agent, OrchConfig, ValidationResult } from './types';
+import type { Ticket, TicketStatus, TicketPriority, Agent, OrchConfig, ValidationResult } from './types';
 import { getEventBus } from './events';
 import { PlanStore } from './plan-store';
 import { AgentManager } from './agent-manager';
@@ -176,13 +176,37 @@ export class Orchestrator {
 export class DependencyGraph {
   private adjacency: Map<string, Set<string>> = new Map(); // ticket -> dependencies
   private reverse: Map<string, Set<string>> = new Map();   // ticket -> dependents
+  private tickets: Map<string, Ticket> = new Map();        // ticket ID -> ticket
 
   /**
    * Build graph from tickets
    */
   build(tickets: Ticket[]): void {
-    // TODO: Implement - T004
-    throw new Error('Not implemented');
+    // Clear existing graph
+    this.adjacency.clear();
+    this.reverse.clear();
+    this.tickets.clear();
+
+    // Store tickets by ID
+    for (const ticket of tickets) {
+      this.tickets.set(ticket.id, ticket);
+      this.adjacency.set(ticket.id, new Set(ticket.dependencies));
+
+      // Initialize reverse mapping for this ticket
+      if (!this.reverse.has(ticket.id)) {
+        this.reverse.set(ticket.id, new Set());
+      }
+    }
+
+    // Build reverse graph (dependents)
+    for (const ticket of tickets) {
+      for (const depId of ticket.dependencies) {
+        if (!this.reverse.has(depId)) {
+          this.reverse.set(depId, new Set());
+        }
+        this.reverse.get(depId)!.add(ticket.id);
+      }
+    }
   }
 
   /**
@@ -203,25 +227,189 @@ export class DependencyGraph {
    * Check if all dependencies are satisfied
    */
   areDependenciesMet(ticketId: string, doneTickets: Set<string>): boolean {
-    // TODO: Implement - T004
-    throw new Error('Not implemented');
+    const deps = this.adjacency.get(ticketId);
+    if (!deps || deps.size === 0) {
+      return true;
+    }
+    for (const depId of deps) {
+      if (!doneTickets.has(depId)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**
-   * Detect cycles using DFS
+   * Get tickets that are ready (Todo status, all dependencies Done)
+   */
+  getReadyTickets(): Ticket[] {
+    // Build set of done ticket IDs
+    const doneTickets = new Set<string>();
+    for (const [id, ticket] of this.tickets) {
+      if (ticket.status === 'Done') {
+        doneTickets.add(id);
+      }
+    }
+
+    // Find ready tickets
+    const ready: Ticket[] = [];
+    for (const [id, ticket] of this.tickets) {
+      if (ticket.status === 'Todo' && this.areDependenciesMet(id, doneTickets)) {
+        ready.push(ticket);
+      }
+    }
+
+    // Sort by priority (P0 > P1 > P2)
+    ready.sort((a, b) => {
+      const priorityOrder: Record<TicketPriority, number> = { P0: 0, P1: 1, P2: 2 };
+      return priorityOrder[a.priority] - priorityOrder[b.priority];
+    });
+
+    return ready;
+  }
+
+  /**
+   * Get tickets blocking a specific ticket (dependencies that aren't Done)
+   */
+  getBlockedBy(ticketId: string): Ticket[] {
+    const deps = this.adjacency.get(ticketId);
+    if (!deps) {
+      return [];
+    }
+
+    const blocking: Ticket[] = [];
+    for (const depId of deps) {
+      const depTicket = this.tickets.get(depId);
+      if (depTicket && depTicket.status !== 'Done') {
+        blocking.push(depTicket);
+      }
+    }
+
+    return blocking;
+  }
+
+  /**
+   * Update a ticket's status in the graph
+   */
+  updateTicketStatus(ticketId: string, newStatus: TicketStatus): void {
+    const ticket = this.tickets.get(ticketId);
+    if (ticket) {
+      ticket.status = newStatus;
+    }
+  }
+
+  /**
+   * Get a ticket by ID
+   */
+  getTicket(ticketId: string): Ticket | undefined {
+    return this.tickets.get(ticketId);
+  }
+
+  /**
+   * Detect cycles using DFS with color-based algorithm
+   * WHITE = 0 (unvisited), GRAY = 1 (in progress), BLACK = 2 (done)
    * Returns array of cycles, each cycle is array of ticket IDs
    */
   detectCycles(): string[][] {
-    // TODO: Implement - T004
-    throw new Error('Not implemented');
+    const WHITE = 0, GRAY = 1, BLACK = 2;
+    const color = new Map<string, number>();
+    const parent = new Map<string, string | null>();
+    const cycles: string[][] = [];
+
+    // Initialize all nodes as WHITE
+    for (const ticketId of this.adjacency.keys()) {
+      color.set(ticketId, WHITE);
+    }
+
+    const dfs = (node: string): void => {
+      color.set(node, GRAY);
+
+      const deps = this.adjacency.get(node) || new Set();
+      for (const dep of deps) {
+        // Only process nodes that exist in our graph
+        if (!this.adjacency.has(dep)) {
+          continue;
+        }
+
+        if (color.get(dep) === GRAY) {
+          // Found a cycle - reconstruct it
+          const cycle: string[] = [dep];
+          let current = node;
+          while (current !== dep) {
+            cycle.push(current);
+            current = parent.get(current)!;
+            if (current === null) break;
+          }
+          cycle.reverse();
+          cycles.push(cycle);
+        } else if (color.get(dep) === WHITE) {
+          parent.set(dep, node);
+          dfs(dep);
+        }
+      }
+
+      color.set(node, BLACK);
+    };
+
+    for (const ticketId of this.adjacency.keys()) {
+      if (color.get(ticketId) === WHITE) {
+        parent.set(ticketId, null);
+        dfs(ticketId);
+      }
+    }
+
+    return cycles;
   }
 
   /**
    * Get topological order (respecting dependencies)
+   * Uses Kahn's algorithm
    */
   getTopologicalOrder(): string[] {
-    // TODO: Implement - T004
-    throw new Error('Not implemented');
+    // Check for cycles first
+    const cycles = this.detectCycles();
+    if (cycles.length > 0) {
+      throw new Error(`Cannot compute topological order: circular dependencies detected`);
+    }
+
+    // Count in-degrees (number of dependencies)
+    const inDegree = new Map<string, number>();
+    for (const ticketId of this.adjacency.keys()) {
+      inDegree.set(ticketId, 0);
+    }
+
+    for (const ticketId of this.adjacency.keys()) {
+      const deps = this.adjacency.get(ticketId)!;
+      // in-degree = number of dependencies (edges coming in)
+      inDegree.set(ticketId, deps.size);
+    }
+
+    // Start with nodes that have no dependencies
+    const queue: string[] = [];
+    for (const [ticketId, degree] of inDegree) {
+      if (degree === 0) {
+        queue.push(ticketId);
+      }
+    }
+
+    const result: string[] = [];
+
+    while (queue.length > 0) {
+      const node = queue.shift()!;
+      result.push(node);
+
+      // For each ticket that depends on this one, decrease their in-degree
+      const dependents = this.reverse.get(node) || new Set();
+      for (const dependent of dependents) {
+        const newDegree = inDegree.get(dependent)! - 1;
+        inDegree.set(dependent, newDegree);
+        if (newDegree === 0) {
+          queue.push(dependent);
+        }
+      }
+    }
+
+    return result;
   }
 }
 

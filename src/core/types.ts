@@ -201,6 +201,38 @@ export interface AgentProgressEvent extends BaseEvent {
   tokensUsed: number;
 }
 
+export interface AgentSpawnedEvent extends BaseEvent {
+  type: 'agent:spawned';
+  agentId: string;
+  ticketId: string;
+}
+
+export interface AgentCompletedEvent extends BaseEvent {
+  type: 'agent:completed';
+  agentId: string;
+  ticketId: string;
+}
+
+export interface AgentFailedEvent extends BaseEvent {
+  type: 'agent:failed';
+  agentId: string;
+  ticketId: string;
+  error?: string;
+}
+
+export interface AgentBlockedEvent extends BaseEvent {
+  type: 'agent:blocked';
+  agentId: string;
+  ticketId: string;
+  reason?: string;
+}
+
+export interface AgentStoppedEvent extends BaseEvent {
+  type: 'agent:stopped';
+  agentId: string;
+  ticketId: string;
+}
+
 export interface LogEntryEvent extends BaseEvent {
   type: 'log:entry';
   level: 'debug' | 'info' | 'warn' | 'error' | 'event';
@@ -215,6 +247,11 @@ export type OrchEvent =
   | PlanLoadedEvent
   | TicketStatusChangedEvent
   | AgentProgressEvent
+  | AgentSpawnedEvent
+  | AgentCompletedEvent
+  | AgentFailedEvent
+  | AgentBlockedEvent
+  | AgentStoppedEvent
   | LogEntryEvent
   | BaseEvent;
 

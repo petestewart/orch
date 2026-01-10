@@ -241,8 +241,8 @@ After all acceptance criteria are met, output exactly:
 
 ### Ticket: T001 Event Bus Implementation
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Create the central event bus that all components will use for communication. Type-safe event definitions, subscribe/publish/unsubscribe methods, event history for debugging.
 - **Acceptance Criteria:**
   - EventBus class with typed events
@@ -254,11 +254,16 @@ After all acceptance criteria are met, output exactly:
   - `bun run typecheck` passes
   - Unit test: subscribe, publish, receive, unsubscribe works
 - **Notes:**
+  - Orchestrator notes:
+    - Intended approach: Implement type-safe pub/sub with Map-based handler storage, auto-incrementing subscription IDs, circular buffer for event history
+    - Key constraints: Must be synchronous, handlers called in registration order, event types defined in src/core/types.ts
+    - Dependencies: None - this is the first ticket
+    - Estimated complexity: moderate
 
 ### Ticket: T002 Plan Parser - Read PLAN.md
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Parse PLAN.md markdown into structured ticket objects. Extract ticket ID, title, priority, status, dependencies, acceptance criteria, validation steps.
 - **Acceptance Criteria:**
   - Parses standard PLAN.md format (see PRD appendix)
@@ -271,11 +276,16 @@ After all acceptance criteria are met, output exactly:
   - Unit test with sample PLAN.md parses correctly
   - Unit test with malformed PLAN.md returns helpful error
 - **Notes:**
+  - Orchestrator notes:
+    - Intended approach: Regex-based markdown parsing, extract ticket sections between ### headers, parse field lines with - **Field:** pattern
+    - Key constraints: Must handle missing optional fields, preserve line numbers for errors, return Ticket objects matching src/core/types.ts
+    - Dependencies: None
+    - Estimated complexity: complex
 
 ### Ticket: T003 Plan Store - Write Updates
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Extend plan store to write ticket status updates back to PLAN.md atomically. Preserve formatting, comments, and unrecognized sections.
 - **Acceptance Criteria:**
   - Updates ticket status in-place (Todo → In Progress → Done)
@@ -292,8 +302,8 @@ After all acceptance criteria are met, output exactly:
 
 ### Ticket: T004 Dependency Graph
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Build and maintain a directed acyclic graph of ticket dependencies. Compute which tickets are "ready" (all dependencies Done).
 - **Acceptance Criteria:**
   - Builds graph from ticket array
@@ -311,8 +321,8 @@ After all acceptance criteria are met, output exactly:
 
 ### Ticket: T005 Agent Subprocess Spawning
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Spawn Claude Code CLI as a subprocess with a prompt. Capture stdout/stderr streams. Track process lifecycle.
 - **Acceptance Criteria:**
   - Spawns `claude` with `--print` and `--dangerously-skip-permissions` flags
@@ -325,11 +335,24 @@ After all acceptance criteria are met, output exactly:
   - Manual test: spawn real claude process, see output
   - Unit test with mock process
 - **Notes:**
+  - Orchestrator notes:
+    - Intended approach: Use Bun.spawn() API to run claude CLI, capture stdout/stderr with onData callbacks, track PID
+    - Key constraints: Must use --print flag, handle process exit codes, store output in buffers
+    - Dependencies: None
+    - Estimated complexity: moderate
+  - Agent-T005 implementation notes:
+    - Implemented spawn() method using Bun.spawn() with --print and --dangerously-skip-permissions flags
+    - Prompt passed via -p flag (not stdin)
+    - Implemented buildImplementationPrompt() based on PLAN.md template
+    - Implemented basic stop() with SIGTERM/SIGKILL and 5s timeout
+    - Added new event types to types.ts: AgentSpawnedEvent, AgentCompletedEvent, AgentFailedEvent, AgentBlockedEvent, AgentStoppedEvent
+    - Created agent-manager.test.ts with 24 tests for spawn logic, prompt building, completion/blocked detection
+    - All validation steps pass: typecheck passes, unit tests pass (68 tests), manual test with real claude process confirmed spawning/stopping works
 
 ### Ticket: T006 Agent Output Parser
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Parse Claude Code output to detect completion, blockers, and progress. Extract tool calls, file changes, test results.
 - **Acceptance Criteria:**
   - Detects `=== TICKET Txxx COMPLETE ===` marker
@@ -347,8 +370,8 @@ After all acceptance criteria are met, output exactly:
 
 ### Ticket: T007 Agent Manager
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Manage multiple agent instances. Track agent pool, enforce concurrency limits, handle agent lifecycle events.
 - **Acceptance Criteria:**
   - Maintains map of active agents by ID
@@ -385,8 +408,8 @@ After all acceptance criteria are met, output exactly:
 
 ### Ticket: T009 Validation Runner
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Execute ticket validation steps after agent reports completion. Run commands, check exit codes, report results.
 - **Acceptance Criteria:**
   - Parses validation steps from ticket
@@ -533,8 +556,8 @@ After all acceptance criteria are met, output exactly:
 
 ### Ticket: T017 Configuration System
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Create configuration system for ORCH settings including automation modes. Required for Review/QA automation.
 - **Acceptance Criteria:**
   - Reads config from .orchrc or orch.config.json
@@ -627,8 +650,8 @@ After all acceptance criteria are met, output exactly:
 
 ### Ticket: T022 CLI Entry Point
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Create the `orch` CLI command entry point. Parse args, initialize components, start TUI.
 - **Acceptance Criteria:**
   - `orch` with no args starts in current directory
@@ -785,8 +808,8 @@ After all acceptance criteria are met, output exactly:
 
 ### Ticket: T030 Review/QA Prompt Templates
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Create specialized prompt templates for Review and QA agents.
 - **Acceptance Criteria:**
   - Review prompt template includes:
@@ -812,8 +835,8 @@ After all acceptance criteria are met, output exactly:
 
 ### Ticket: T031 Epic Manager Implementation
 - **Priority:** P0
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Create Epic Manager to handle epic directories and worktree lifecycle.
 - **Acceptance Criteria:**
   - Discovers epics from PLAN.md (epic field on tickets)
