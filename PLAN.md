@@ -534,8 +534,8 @@ After all acceptance criteria are met, output exactly:
 
 ### Ticket: T015 SessionView Live Output
 - **Priority:** P1
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Update SessionView to show real-time agent output. Stream stdout, highlight tool calls, show progress.
 - **Acceptance Criteria:**
   - Streams agent stdout in real-time
@@ -547,7 +547,7 @@ After all acceptance criteria are met, output exactly:
   - `bun run typecheck` passes
   - Manual test: see live agent output
   - Manual test: tool calls highlighted
-- **Notes:**
+- **Notes:** Implementation complete. Added SessionViewState class for live event subscription, parseOutputToEvents for tool parsing, TOOL_COLORS for tool highlighting, progress estimation via parseAgentOutput. Typecheck passes. 631 tests pass.
 - **Dependencies:** T006, T012
 
 ### Ticket: T016 Graceful Shutdown

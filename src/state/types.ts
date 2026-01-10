@@ -3,6 +3,7 @@ export type TicketType = 'feature' | 'bug' | 'task'
 export type Priority = 'P1' | 'P2' | 'P3'
 export type AgentStatus = 'working' | 'waiting' | 'idle'
 export type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'EVENT'
+export type TicketAutomationMode = 'automatic' | 'manual' | 'paused'
 
 export interface Epic {
   id: string
@@ -26,6 +27,12 @@ export interface Ticket {
   description?: string
   acceptanceCriteria: string[]
   progress?: number
+  // Human intervention fields
+  awaitingApproval?: boolean          // True when in Review/QA and waiting for human approval
+  automationMode?: TicketAutomationMode  // Per-ticket automation override
+  reviewOutput?: string               // Output from Review agent
+  qaOutput?: string                   // Output from QA agent
+  rejectionFeedback?: string          // Feedback when rejected from Review/QA
 }
 
 export interface Agent {
@@ -85,4 +92,16 @@ export interface AppState {
   // Refine view state
   refineViewActivePane: 'sidebar' | 'chat'
   refineViewSelectedTicket: number
+  // Kanban epic grouping state (T034)
+  kanbanEpicFilter?: string  // undefined = show all, string = filter by specific epic
+  kanbanCollapsedEpics: Set<string>  // Set of epic IDs that are collapsed
+  // Human intervention state (T029)
+  confirmationDialog?: {
+    title: string
+    message: string
+    confirmLabel: string
+    cancelLabel: string
+    onConfirm: () => void
+    onCancel: () => void
+  }
 }

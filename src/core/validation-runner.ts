@@ -46,7 +46,7 @@ export async function runValidationStep(
 
   try {
     // Use Bun.spawn to run the command
-    const proc = Bun.spawn(['sh', '-c', command], {
+    const proc = Bun.spawn(['/bin/sh', '-c', command], {
       cwd: workingDir,
       stdout: 'pipe',
       stderr: 'pipe',

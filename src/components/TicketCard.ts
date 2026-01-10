@@ -138,6 +138,30 @@ export function createTicketCard(ctx: RenderContext, props: TicketCardProps): Bo
     rightInfo.add(qaIndicator)
   }
 
+  // Awaiting approval indicator - show when ticket needs human approval
+  if (ticket.awaitingApproval) {
+    const approvalIndicator = new TextRenderable(ctx, {
+      content: t`${fg(colors.yellowBright)('⏳')} ${bold(fg(colors.yellow)('approval'))}`,
+    })
+    rightInfo.add(approvalIndicator)
+  }
+
+  // Paused automation indicator
+  if (ticket.automationMode === 'paused') {
+    const pausedIndicator = new TextRenderable(ctx, {
+      content: t`${fg(colors.textMuted)('⏸')} ${dim(fg(colors.textDim)('paused'))}`,
+    })
+    rightInfo.add(pausedIndicator)
+  }
+
+  // Manual mode indicator
+  if (ticket.automationMode === 'manual') {
+    const manualIndicator = new TextRenderable(ctx, {
+      content: t`${fg(colors.cyan)('✋')} ${dim(fg(colors.textDim)('manual'))}`,
+    })
+    rightInfo.add(manualIndicator)
+  }
+
   bottomRow.add(rightInfo)
   card.add(bottomRow)
 

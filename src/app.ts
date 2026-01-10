@@ -396,6 +396,13 @@ export class App {
       return
     }
 
+    // 'e' key cycles through epic filter (T034)
+    if (key.name === 'e') {
+      this.store.cycleKanbanEpicFilter()
+      this.renderCurrentView()
+      return
+    }
+
     if (needsRerender) {
       this.renderCurrentView()
     }

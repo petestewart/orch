@@ -217,6 +217,9 @@ export class Store {
       // Refine view state
       refineViewActivePane: 'sidebar',
       refineViewSelectedTicket: 0,
+      // Kanban epic grouping state (T034)
+      kanbanEpicFilter: undefined,
+      kanbanCollapsedEpics: new Set<string>(),
     };
 
     // Subscribe to all relevant events
@@ -794,6 +797,105 @@ export class Store {
 
     // Add log entry
     this.addSystemLog('EVENT', `Stop requested for agent ${agentId}`);
+  }
+
+  // ============================================================================
+  // Kanban Epic Grouping (T034)
+  // ============================================================================
+
+  /**
+   * Set the epic filter for Kanban view
+   * @param epicId Epic ID to filter by, or undefined for all epics
+   */
+  setKanbanEpicFilter(epicId: string | undefined): void {
+    this.state.kanbanEpicFilter = epicId;
+    this.notifyChange();
+  }
+
+  /**
+   * Cycle through epic filter options (all -> epic1 -> epic2 -> ... -> all)
+   */
+  cycleKanbanEpicFilter(): void {
+    const epicIds = ['', ...this.state.epics.map(e => e.id)]; // '' means "all"
+    const currentIndex = this.state.kanbanEpicFilter
+      ? epicIds.indexOf(this.state.kanbanEpicFilter)
+      : 0;
+    const nextIndex = (currentIndex + 1) % epicIds.length;
+    this.state.kanbanEpicFilter = epicIds[nextIndex] || undefined;
+    this.notifyChange();
+  }
+
+  /**
+   * Get the current epic filter name for display
+   */
+  getKanbanEpicFilterName(): string {
+    if (!this.state.kanbanEpicFilter) {
+      return 'All Epics';
+    }
+    const epic = this.state.epics.find(e => e.id === this.state.kanbanEpicFilter);
+    return epic?.name || this.state.kanbanEpicFilter;
+  }
+
+  /**
+   * Toggle collapse state for an epic in Kanban view
+   * @param epicId Epic ID to toggle
+   */
+  toggleKanbanEpicCollapse(epicId: string): void {
+    if (this.state.kanbanCollapsedEpics.has(epicId)) {
+      this.state.kanbanCollapsedEpics.delete(epicId);
+    } else {
+      this.state.kanbanCollapsedEpics.add(epicId);
+    }
+    this.notifyChange();
+  }
+
+  /**
+   * Check if an epic is collapsed in Kanban view
+   * @param epicId Epic ID to check
+   */
+  isKanbanEpicCollapsed(epicId: string): boolean {
+    return this.state.kanbanCollapsedEpics.has(epicId);
+  }
+
+  /**
+   * Expand all collapsed epics in Kanban view
+   */
+  expandAllKanbanEpics(): void {
+    this.state.kanbanCollapsedEpics.clear();
+    this.notifyChange();
+  }
+
+  /**
+   * Collapse all epics in Kanban view
+   */
+  collapseAllKanbanEpics(): void {
+    for (const epic of this.state.epics) {
+      this.state.kanbanCollapsedEpics.add(epic.id);
+    }
+    this.notifyChange();
+  }
+
+  /**
+   * Get tickets grouped by epic for a specific status
+   * Returns a map of epicId -> tickets (with special key '' for no-epic tickets)
+   */
+  getTicketsByStatusGroupedByEpic(status: TicketStatus): Map<string, Ticket[]> {
+    const tickets = this.getTicketsByStatus(status);
+    const grouped = new Map<string, Ticket[]>();
+
+    // Apply epic filter if set
+    const filteredTickets = this.state.kanbanEpicFilter
+      ? tickets.filter(t => t.epicId === this.state.kanbanEpicFilter)
+      : tickets;
+
+    for (const ticket of filteredTickets) {
+      const epicId = ticket.epicId || '';
+      const epicTickets = grouped.get(epicId) || [];
+      epicTickets.push(ticket);
+      grouped.set(epicId, epicTickets);
+    }
+
+    return grouped;
   }
 
   // Removed simulation methods (updateAgentProgress, addRandomLogEntry)
