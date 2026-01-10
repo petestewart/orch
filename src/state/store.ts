@@ -1,148 +1,201 @@
-import type { AppState, Epic, Ticket, Agent, LogEntry, TicketStatus } from './types.js'
+/**
+ * Event-Driven State Store
+ *
+ * Subscribes to EventBus events and maintains derived state for the UI.
+ * Replaces the prototype's mock-based store.
+ *
+ * Implements: T010
+ */
 
-// Mock data
-const mockEpics: Epic[] = [
-  { id: 'e1', name: 'Auth v2', ticketIds: ['t31', 't32', 't35', 't38', 't39', 't42', 't43', 't45'] },
-  { id: 'e2', name: 'Payments', ticketIds: ['t33', 't44'] },
-]
+import type { AppState, Epic, Ticket, Agent, LogEntry, TicketStatus } from './types.js';
+import type {
+  Ticket as CoreTicket,
+  Agent as CoreAgent,
+  Epic as CoreEpic,
+  PlanLoadedEvent,
+  TicketStatusChangedEvent,
+  AgentSpawnedEvent,
+  AgentProgressEvent,
+  AgentCompletedEvent,
+  AgentFailedEvent,
+  AgentBlockedEvent,
+  AgentStoppedEvent,
+  LogEntryEvent,
+  OrchEvent,
+} from '../core/types.js';
+import { getEventBus, EventBus } from '../core/events.js';
 
-const mockTickets: Ticket[] = [
-  // Backlog
-  {
-    id: 't42', number: 42, title: 'OAuth flow', epicId: 'e1', type: 'feature',
-    status: 'backlog', priority: 'P1', points: 3, assignee: 'a1',
-    blockedBy: [], blocks: ['t43'], ready: true,
-    description: 'Implement OAuth 2.0 authentication flow',
-    acceptanceCriteria: [
-      'User can initiate OAuth flow from login page',
-      'Tokens are securely stored after successful auth',
-      'Token refresh happens automatically before expiry',
-    ],
-  },
-  {
-    id: 't43', number: 43, title: 'Token refresh', epicId: 'e1', type: 'feature',
-    status: 'backlog', priority: 'P2', points: 2, blockedBy: ['t42'], blocks: [],
-    ready: false, description: 'Handle automatic token refresh',
-    acceptanceCriteria: ['Tokens refresh before expiry', 'User session persists'],
-  },
-  {
-    id: 't44', number: 44, title: 'Webhook handler', epicId: 'e2', type: 'task',
-    status: 'backlog', priority: 'P3', points: 1, blockedBy: [], blocks: [],
-    ready: true, description: 'Process incoming webhooks',
-    acceptanceCriteria: ['Validate webhook signatures', 'Process events asynchronously'],
-  },
-  {
-    id: 't45', number: 45, title: 'Rate limiting', epicId: 'e1', type: 'bug',
-    status: 'backlog', priority: 'P1', points: 1, blockedBy: [], blocks: [],
-    ready: true, description: 'Fix rate limiting on auth endpoints',
-    acceptanceCriteria: ['Rate limits enforced correctly', 'Clear error messages'],
-  },
-  // In Progress
-  {
-    id: 't38', number: 38, title: 'JWT tokens', epicId: 'e1', type: 'feature',
-    status: 'in_progress', priority: 'P2', points: 2, assignee: 'a2',
-    blockedBy: [], blocks: [], ready: true, progress: 40,
-    description: 'Implement JWT token generation and validation',
-    acceptanceCriteria: ['Tokens generated with correct claims', 'Validation rejects expired tokens'],
-  },
-  {
-    id: 't39', number: 39, title: 'Session mgmt', epicId: 'e1', type: 'task',
-    status: 'in_progress', priority: 'P3', points: 1, assignee: 'a1',
-    blockedBy: [], blocks: [], ready: true, progress: 95,
-    description: 'Session management with Redis backend',
-    acceptanceCriteria: ['Sessions stored in Redis', 'Session expiry works'],
-  },
-  // Review
-  {
-    id: 't35', number: 35, title: 'Login UI', epicId: 'e1', type: 'feature',
-    status: 'review', priority: 'P2', points: 1, assignee: 'a3',
-    blockedBy: [], blocks: [], ready: true, progress: 100,
-    description: 'Build login form with email/password and OAuth buttons',
-    acceptanceCriteria: ['Form validates input', 'Shows loading state', 'Error messages display'],
-  },
-  // Done
-  {
-    id: 't31', number: 31, title: 'DB schema', epicId: 'e1', type: 'task',
-    status: 'done', priority: 'P1', points: 1, assignee: 'a1',
-    blockedBy: [], blocks: [], ready: true,
-    description: 'Create database schema for auth tables',
-    acceptanceCriteria: ['Schema created', 'Migrations run'],
-  },
-  {
-    id: 't32', number: 32, title: 'API routes', epicId: 'e1', type: 'feature',
-    status: 'done', priority: 'P1', points: 2, assignee: 'a2',
-    blockedBy: [], blocks: [], ready: true,
-    description: 'Create auth API routes',
-    acceptanceCriteria: ['Routes respond correctly', 'Auth middleware works'],
-  },
-  {
-    id: 't33', number: 33, title: 'Payment hook', epicId: 'e2', type: 'task',
-    status: 'done', priority: 'P2', points: 1, assignee: 'a3',
-    blockedBy: [], blocks: [], ready: true,
-    description: 'Implement Stripe webhook handler',
-    acceptanceCriteria: ['Webhook signature validated', 'Events processed'],
-  },
-]
+/**
+ * Callback type for state change notifications
+ */
+type OnChangeCallback = (state: AppState) => void;
 
-const mockAgents: Agent[] = [
-  {
-    id: 'a1', name: 'a1', model: 'claude-sonnet',
-    status: 'working', currentTicketId: 't39', progress: 95,
-    elapsed: '7m 12s', tokensIn: 12847, tokensOut: 8234, cost: 0.89,
-    lastAction: 'Running tests: src/auth/__tests__/session.test.ts',
-  },
-  {
-    id: 'a2', name: 'a2', model: 'claude-sonnet',
-    status: 'working', currentTicketId: 't38', progress: 78,
-    elapsed: '4m 32s', tokensIn: 8421, tokensOut: 5892, cost: 0.62,
-    lastAction: 'Writing file: src/auth/jwt.service.ts',
-  },
-  {
-    id: 'a3', name: 'a3', model: 'claude-sonnet',
-    status: 'waiting', currentTicketId: 't35', progress: 100,
-    elapsed: '12m 05s', tokensIn: 15234, tokensOut: 11456, cost: 0.96,
-    lastAction: 'Completed task, awaiting review approval',
-  },
-  {
-    id: 'a4', name: 'a4', model: 'claude-haiku',
-    status: 'idle', progress: 0, elapsed: '0s',
-    tokensIn: 0, tokensOut: 0, cost: 0, lastAction: 'Ready for assignment',
-  },
-]
+/**
+ * Map core TicketStatus to UI TicketStatus
+ */
+function mapTicketStatus(status: CoreTicket['status']): TicketStatus {
+  const statusMap: Record<CoreTicket['status'], TicketStatus> = {
+    'Todo': 'backlog',
+    'InProgress': 'in_progress',
+    'Review': 'review',
+    'QA': 'qa',
+    'Done': 'done',
+    'Failed': 'backlog', // Failed tickets go back to backlog for retry
+  };
+  return statusMap[status];
+}
 
-const mockLogs: LogEntry[] = [
-  { id: 'l1', timestamp: '12:47:32', level: 'INFO', agentId: 'a2', ticketNumber: 38, message: 'Completed writing src/auth/jwt.service.ts (142 lines)' },
-  { id: 'l2', timestamp: '12:47:28', level: 'INFO', agentId: 'a2', ticketNumber: 38, message: 'Writing file: src/auth/jwt.service.ts' },
-  { id: 'l3', timestamp: '12:47:15', level: 'INFO', agentId: 'a2', ticketNumber: 38, message: 'Read file: src/auth/index.ts (58 lines)' },
-  { id: 'l4', timestamp: '12:47:12', level: 'INFO', agentId: 'a2', ticketNumber: 38, message: 'Starting task: JWT tokens implementation' },
-  { id: 'l5', timestamp: '12:47:10', level: 'EVENT', agentId: 'a2', ticketNumber: 38, message: 'Agent assigned to ticket' },
-  { id: 'l6', timestamp: '12:46:58', level: 'EVENT', ticketNumber: 38, message: 'Status changed: Backlog -> In Progress' },
-  { id: 'l7', timestamp: '12:46:55', level: 'INFO', agentId: 'a1', ticketNumber: 39, message: 'Completed task: Session management' },
-  { id: 'l8', timestamp: '12:46:42', level: 'WARN', agentId: 'a1', ticketNumber: 39, message: 'Retry attempt 2/3 for API call' },
-  { id: 'l9', timestamp: '12:46:38', level: 'WARN', agentId: 'a1', ticketNumber: 39, message: 'API timeout, retrying...' },
-  { id: 'l10', timestamp: '12:45:21', level: 'INFO', agentId: 'a1', ticketNumber: 39, message: 'Running tests: src/auth/__tests__/session.test.ts' },
-  { id: 'l11', timestamp: '12:44:58', level: 'INFO', agentId: 'a1', ticketNumber: 39, message: 'Writing file: src/auth/session.service.ts' },
-  { id: 'l12', timestamp: '12:43:12', level: 'INFO', agentId: 'a3', ticketNumber: 35, message: 'Completed task: Login UI component' },
-  { id: 'l13', timestamp: '12:43:10', level: 'EVENT', ticketNumber: 35, message: 'Status changed: In Progress -> Review' },
-  { id: 'l14', timestamp: '12:42:55', level: 'INFO', agentId: 'a3', ticketNumber: 35, message: 'All tests passing (12/12)' },
-  { id: 'l15', timestamp: '12:42:31', level: 'ERROR', agentId: 'a3', ticketNumber: 35, message: "Test failed: LoginForm.test.tsx - expected 'Submit' got 'Login'" },
-  { id: 'l16', timestamp: '12:42:28', level: 'INFO', agentId: 'a3', ticketNumber: 35, message: 'Running tests: src/components/__tests__/LoginForm.test.tsx' },
-  { id: 'l17', timestamp: '12:41:45', level: 'INFO', agentId: 'a3', ticketNumber: 35, message: 'Writing file: src/components/LoginForm.tsx' },
-  { id: 'l18', timestamp: '12:40:22', level: 'EVENT', ticketNumber: 42, message: 'Ticket created: OAuth flow implementation' },
-  { id: 'l19', timestamp: '12:40:18', level: 'EVENT', ticketNumber: 43, message: 'Dependency added: #43 blocked by #42' },
-  { id: 'l20', timestamp: '12:38:42', level: 'INFO', message: 'System initialized, 3 agents available' },
-]
+/**
+ * Map core ticket priority to UI format
+ */
+function mapPriority(priority: CoreTicket['priority']): 'P1' | 'P2' | 'P3' {
+  // Map P0 to P1 since UI only has P1, P2, P3
+  if (priority === 'P0') return 'P1';
+  return priority as 'P1' | 'P2' | 'P3';
+}
+
+/**
+ * Map core Ticket to UI Ticket format
+ */
+function mapTicket(coreTicket: CoreTicket): Ticket {
+  // Extract ticket number from ID (e.g., "T001" -> 1)
+  const ticketNumber = parseInt(coreTicket.id.replace('T', ''), 10) || 0;
+
+  // Determine if ticket is ready (no incomplete dependencies)
+  // For now, a ticket is ready if it has no dependencies (they should be resolved externally)
+  const ready = coreTicket.dependencies.length === 0;
+
+  return {
+    id: coreTicket.id.toLowerCase(), // UI uses lowercase IDs
+    number: ticketNumber,
+    title: coreTicket.title,
+    epicId: coreTicket.epic || '', // Map epic name to epicId
+    type: 'task', // Default type - could be enhanced based on ticket content
+    status: mapTicketStatus(coreTicket.status),
+    priority: mapPriority(coreTicket.priority),
+    points: 1, // Default points - PLAN.md doesn't have points
+    assignee: coreTicket.owner,
+    blockedBy: coreTicket.dependencies.map(d => d.toLowerCase()),
+    blocks: [], // Would need reverse dependency lookup
+    ready,
+    description: coreTicket.description,
+    acceptanceCriteria: coreTicket.acceptanceCriteria,
+    progress: coreTicket.status === 'InProgress' ? 50 : (coreTicket.status === 'Done' ? 100 : 0),
+  };
+}
+
+/**
+ * Map core AgentStatus to UI AgentStatus
+ */
+function mapAgentStatus(status: CoreAgent['status']): Agent['status'] {
+  const statusMap: Record<CoreAgent['status'], Agent['status']> = {
+    'Idle': 'idle',
+    'Starting': 'working',
+    'Working': 'working',
+    'Validating': 'working',
+    'Blocked': 'waiting',
+    'Complete': 'idle',
+    'Failed': 'idle',
+  };
+  return statusMap[status];
+}
+
+/**
+ * Format elapsed time from milliseconds
+ */
+function formatElapsed(startedAt: Date | undefined): string {
+  if (!startedAt) return '0s';
+  const elapsed = Date.now() - startedAt.getTime();
+  const seconds = Math.floor(elapsed / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+
+  if (hours > 0) {
+    return `${hours}h ${minutes % 60}m`;
+  } else if (minutes > 0) {
+    return `${minutes}m ${seconds % 60}s`;
+  }
+  return `${seconds}s`;
+}
+
+/**
+ * Map core Agent to UI Agent format
+ */
+function mapAgent(coreAgent: CoreAgent): Agent {
+  return {
+    id: coreAgent.id,
+    name: coreAgent.id, // Use ID as name
+    model: 'claude-sonnet', // Default model - could be enhanced
+    status: mapAgentStatus(coreAgent.status),
+    currentTicketId: coreAgent.ticketId?.toLowerCase(),
+    progress: coreAgent.progress,
+    elapsed: formatElapsed(coreAgent.startedAt),
+    tokensIn: Math.round(coreAgent.tokensUsed * 0.8), // Estimate 80% input
+    tokensOut: Math.round(coreAgent.tokensUsed * 0.2), // Estimate 20% output
+    cost: coreAgent.cost,
+    lastAction: coreAgent.lastAction,
+  };
+}
+
+/**
+ * Map core Epic to UI Epic format
+ */
+function mapEpic(coreEpic: CoreEpic, tickets: CoreTicket[]): Epic {
+  // Find all tickets belonging to this epic
+  const epicTicketIds = tickets
+    .filter(t => t.epic === coreEpic.name)
+    .map(t => t.id.toLowerCase());
+
+  return {
+    id: coreEpic.name.toLowerCase().replace(/\s+/g, '-'), // Generate ID from name
+    name: coreEpic.name,
+    ticketIds: epicTicketIds,
+  };
+}
+
+/**
+ * Map log level from core to UI format
+ */
+function mapLogLevel(level: LogEntryEvent['level']): LogEntry['level'] {
+  const levelMap: Record<LogEntryEvent['level'], LogEntry['level']> = {
+    'debug': 'INFO',
+    'info': 'INFO',
+    'warn': 'WARN',
+    'error': 'ERROR',
+    'event': 'EVENT',
+  };
+  return levelMap[level];
+}
+
+/**
+ * Format timestamp for log display
+ */
+function formatTimestamp(date: Date): string {
+  return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}`;
+}
 
 export class Store {
-  private state: AppState
+  private state: AppState;
+  private eventBus: EventBus;
+  private unsubscribers: (() => void)[] = [];
+  private onChangeCallbacks: OnChangeCallback[] = [];
+  private logIdCounter = 0;
 
-  constructor() {
+  // Store core data for mapping
+  private coreTickets: Map<string, CoreTicket> = new Map();
+  private coreAgents: Map<string, CoreAgent> = new Map();
+  private coreEpics: Map<string, CoreEpic> = new Map();
+
+  constructor(eventBus?: EventBus) {
+    this.eventBus = eventBus || getEventBus();
+
+    // Initialize with empty state (no mock data)
     this.state = {
-      epics: mockEpics,
-      tickets: mockTickets,
-      agents: mockAgents,
-      logs: mockLogs,
-      selectedEpicIds: ['e1', 'e2'],
+      epics: [],
+      tickets: [],
+      agents: [],
+      logs: [],
+      selectedEpicIds: [],
       currentView: 'kanban',
       selectedColumnIndex: 0,
       selectedTicketIndex: 0,
@@ -158,114 +211,485 @@ export class Store {
       // Refine view state
       refineViewActivePane: 'sidebar',
       refineViewSelectedTicket: 0,
+    };
+
+    // Subscribe to all relevant events
+    this.subscribeToEvents();
+  }
+
+  /**
+   * Subscribe to all relevant EventBus events
+   */
+  private subscribeToEvents(): void {
+    // Plan events
+    this.unsubscribers.push(
+      this.eventBus.subscribe<PlanLoadedEvent>('plan:loaded', (event) => {
+        this.handlePlanLoaded(event);
+      })
+    );
+
+    // Ticket events
+    this.unsubscribers.push(
+      this.eventBus.subscribe<TicketStatusChangedEvent>('ticket:status-changed', (event) => {
+        this.handleTicketStatusChanged(event);
+      })
+    );
+
+    // Agent events
+    this.unsubscribers.push(
+      this.eventBus.subscribe<AgentSpawnedEvent>('agent:spawned', (event) => {
+        this.handleAgentSpawned(event);
+      })
+    );
+
+    this.unsubscribers.push(
+      this.eventBus.subscribe<AgentProgressEvent>('agent:progress', (event) => {
+        this.handleAgentProgress(event);
+      })
+    );
+
+    this.unsubscribers.push(
+      this.eventBus.subscribe<AgentCompletedEvent>('agent:completed', (event) => {
+        this.handleAgentCompleted(event);
+      })
+    );
+
+    this.unsubscribers.push(
+      this.eventBus.subscribe<AgentFailedEvent>('agent:failed', (event) => {
+        this.handleAgentFailed(event);
+      })
+    );
+
+    this.unsubscribers.push(
+      this.eventBus.subscribe<AgentBlockedEvent>('agent:blocked', (event) => {
+        this.handleAgentBlocked(event);
+      })
+    );
+
+    this.unsubscribers.push(
+      this.eventBus.subscribe<AgentStoppedEvent>('agent:stopped', (event) => {
+        this.handleAgentStopped(event);
+      })
+    );
+
+    // Log events
+    this.unsubscribers.push(
+      this.eventBus.subscribe<LogEntryEvent>('log:entry', (event) => {
+        this.handleLogEntry(event);
+      })
+    );
+  }
+
+  /**
+   * Handle plan:loaded event - populates initial tickets and epics
+   */
+  private handlePlanLoaded(event: PlanLoadedEvent): void {
+    // Store core data
+    this.coreTickets.clear();
+    this.coreEpics.clear();
+
+    for (const ticket of event.tickets) {
+      this.coreTickets.set(ticket.id, ticket);
+    }
+
+    for (const epic of event.epics) {
+      this.coreEpics.set(epic.name, epic);
+    }
+
+    // Map to UI format
+    this.state.tickets = event.tickets.map(mapTicket);
+    this.state.epics = event.epics.map(epic => mapEpic(epic, event.tickets));
+
+    // Update blockedBy relationships with computed reverse dependencies
+    this.computeBlocksRelationships();
+
+    // Select all epics by default
+    this.state.selectedEpicIds = this.state.epics.map(e => e.id);
+
+    // Add log entry for plan loaded
+    this.addSystemLog('EVENT', `Plan loaded: ${event.tickets.length} tickets, ${event.epics.length} epics`);
+
+    this.notifyChange();
+  }
+
+  /**
+   * Compute reverse dependency relationships (blocks)
+   */
+  private computeBlocksRelationships(): void {
+    // Build a map of ticket ID -> tickets it blocks
+    const blocksMap = new Map<string, string[]>();
+
+    for (const ticket of this.state.tickets) {
+      for (const blockedById of ticket.blockedBy) {
+        const blocks = blocksMap.get(blockedById) || [];
+        blocks.push(ticket.id);
+        blocksMap.set(blockedById, blocks);
+      }
+    }
+
+    // Update tickets with blocks info
+    for (const ticket of this.state.tickets) {
+      ticket.blocks = blocksMap.get(ticket.id) || [];
     }
   }
 
+  /**
+   * Handle ticket:status-changed event
+   */
+  private handleTicketStatusChanged(event: TicketStatusChangedEvent): void {
+    const ticketId = event.ticketId.toLowerCase();
+    const ticket = this.state.tickets.find(t => t.id === ticketId);
+
+    if (ticket) {
+      ticket.status = mapTicketStatus(event.newStatus);
+
+      // Update progress based on status
+      if (event.newStatus === 'Done') {
+        ticket.progress = 100;
+      } else if (event.newStatus === 'InProgress') {
+        ticket.progress = ticket.progress || 10;
+      }
+
+      // Update core ticket
+      const coreTicket = this.coreTickets.get(event.ticketId);
+      if (coreTicket) {
+        coreTicket.status = event.newStatus;
+      }
+
+      // Add log entry
+      this.addSystemLog('EVENT', `Ticket ${event.ticketId} status: ${event.previousStatus} -> ${event.newStatus}`, event.ticketId);
+
+      this.notifyChange();
+    }
+  }
+
+  /**
+   * Handle agent:spawned event
+   */
+  private handleAgentSpawned(event: AgentSpawnedEvent): void {
+    // Create new agent
+    const coreAgent: CoreAgent = {
+      id: event.agentId,
+      type: 'Implementation',
+      status: 'Starting',
+      ticketId: event.ticketId,
+      tokensUsed: 0,
+      cost: 0,
+      progress: 0,
+      startedAt: event.timestamp,
+    };
+
+    this.coreAgents.set(event.agentId, coreAgent);
+    this.state.agents.push(mapAgent(coreAgent));
+
+    // Update ticket assignee
+    const ticketId = event.ticketId.toLowerCase();
+    const ticket = this.state.tickets.find(t => t.id === ticketId);
+    if (ticket) {
+      ticket.assignee = event.agentId;
+    }
+
+    // Add log entry
+    this.addSystemLog('EVENT', `Agent ${event.agentId} spawned for ticket ${event.ticketId}`, event.ticketId, event.agentId);
+
+    this.notifyChange();
+  }
+
+  /**
+   * Handle agent:progress event
+   */
+  private handleAgentProgress(event: AgentProgressEvent): void {
+    const coreAgent = this.coreAgents.get(event.agentId);
+    if (coreAgent) {
+      coreAgent.status = 'Working';
+      coreAgent.progress = event.progress;
+      coreAgent.lastAction = event.lastAction;
+      coreAgent.tokensUsed = event.tokensUsed;
+
+      // Update UI agent
+      const agentIndex = this.state.agents.findIndex(a => a.id === event.agentId);
+      if (agentIndex >= 0) {
+        this.state.agents[agentIndex] = mapAgent(coreAgent);
+      }
+
+      // Update ticket progress
+      const ticketId = event.ticketId.toLowerCase();
+      const ticket = this.state.tickets.find(t => t.id === ticketId);
+      if (ticket) {
+        ticket.progress = event.progress;
+      }
+
+      // Add log entry for significant actions
+      if (event.lastAction && event.lastAction.length > 0) {
+        this.addSystemLog('INFO', event.lastAction.slice(0, 100), event.ticketId, event.agentId);
+      }
+
+      this.notifyChange();
+    }
+  }
+
+  /**
+   * Handle agent:completed event
+   */
+  private handleAgentCompleted(event: AgentCompletedEvent): void {
+    const coreAgent = this.coreAgents.get(event.agentId);
+    if (coreAgent) {
+      coreAgent.status = 'Complete';
+      coreAgent.progress = 100;
+
+      // Update UI agent
+      const agentIndex = this.state.agents.findIndex(a => a.id === event.agentId);
+      if (agentIndex >= 0) {
+        this.state.agents[agentIndex] = mapAgent(coreAgent);
+      }
+
+      // Add log entry
+      this.addSystemLog('EVENT', `Agent ${event.agentId} completed ticket ${event.ticketId}`, event.ticketId, event.agentId);
+
+      this.notifyChange();
+    }
+  }
+
+  /**
+   * Handle agent:failed event
+   */
+  private handleAgentFailed(event: AgentFailedEvent): void {
+    const coreAgent = this.coreAgents.get(event.agentId);
+    if (coreAgent) {
+      coreAgent.status = 'Failed';
+
+      // Update UI agent
+      const agentIndex = this.state.agents.findIndex(a => a.id === event.agentId);
+      if (agentIndex >= 0) {
+        this.state.agents[agentIndex] = mapAgent(coreAgent);
+      }
+
+      // Add log entry
+      this.addSystemLog('ERROR', `Agent ${event.agentId} failed: ${event.error || 'Unknown error'}`, event.ticketId, event.agentId);
+
+      this.notifyChange();
+    }
+  }
+
+  /**
+   * Handle agent:blocked event
+   */
+  private handleAgentBlocked(event: AgentBlockedEvent): void {
+    const coreAgent = this.coreAgents.get(event.agentId);
+    if (coreAgent) {
+      coreAgent.status = 'Blocked';
+
+      // Update UI agent
+      const agentIndex = this.state.agents.findIndex(a => a.id === event.agentId);
+      if (agentIndex >= 0) {
+        this.state.agents[agentIndex] = mapAgent(coreAgent);
+      }
+
+      // Add log entry
+      this.addSystemLog('WARN', `Agent ${event.agentId} blocked: ${event.reason || 'Unknown reason'}`, event.ticketId, event.agentId);
+
+      this.notifyChange();
+    }
+  }
+
+  /**
+   * Handle agent:stopped event
+   */
+  private handleAgentStopped(event: AgentStoppedEvent): void {
+    const coreAgent = this.coreAgents.get(event.agentId);
+    if (coreAgent) {
+      coreAgent.status = 'Idle';
+
+      // Update UI agent
+      const agentIndex = this.state.agents.findIndex(a => a.id === event.agentId);
+      if (agentIndex >= 0) {
+        this.state.agents[agentIndex] = mapAgent(coreAgent);
+      }
+
+      // Add log entry
+      this.addSystemLog('EVENT', `Agent ${event.agentId} stopped`, event.ticketId, event.agentId);
+
+      this.notifyChange();
+    }
+  }
+
+  /**
+   * Handle log:entry event
+   */
+  private handleLogEntry(event: LogEntryEvent): void {
+    const ticketNumber = event.ticketId
+      ? parseInt(event.ticketId.replace(/^T/i, ''), 10) || undefined
+      : undefined;
+
+    const logEntry: LogEntry = {
+      id: `l${++this.logIdCounter}`,
+      timestamp: formatTimestamp(event.timestamp),
+      level: mapLogLevel(event.level),
+      agentId: event.agentId,
+      ticketNumber,
+      message: event.message,
+    };
+
+    // Add to beginning of logs (newest first)
+    this.state.logs.unshift(logEntry);
+
+    // Keep log size reasonable
+    if (this.state.logs.length > 100) {
+      this.state.logs.pop();
+    }
+
+    this.notifyChange();
+  }
+
+  /**
+   * Add a system-generated log entry
+   */
+  private addSystemLog(
+    level: LogEntry['level'],
+    message: string,
+    ticketId?: string,
+    agentId?: string
+  ): void {
+    const ticketNumber = ticketId
+      ? parseInt(ticketId.replace(/^T/i, ''), 10) || undefined
+      : undefined;
+
+    const logEntry: LogEntry = {
+      id: `l${++this.logIdCounter}`,
+      timestamp: formatTimestamp(new Date()),
+      level,
+      agentId,
+      ticketNumber,
+      message,
+    };
+
+    this.state.logs.unshift(logEntry);
+
+    if (this.state.logs.length > 100) {
+      this.state.logs.pop();
+    }
+  }
+
+  /**
+   * Register an onChange callback
+   * Returns an unsubscribe function
+   */
+  onChange(callback: OnChangeCallback): () => void {
+    this.onChangeCallbacks.push(callback);
+    return () => {
+      const index = this.onChangeCallbacks.indexOf(callback);
+      if (index >= 0) {
+        this.onChangeCallbacks.splice(index, 1);
+      }
+    };
+  }
+
+  /**
+   * Notify all onChange callbacks
+   */
+  private notifyChange(): void {
+    for (const callback of this.onChangeCallbacks) {
+      callback(this.state);
+    }
+  }
+
+  /**
+   * Clean up subscriptions
+   */
+  destroy(): void {
+    for (const unsub of this.unsubscribers) {
+      unsub();
+    }
+    this.unsubscribers = [];
+    this.onChangeCallbacks = [];
+  }
+
+  // ============================================================================
+  // Public API - compatible with existing UI components
+  // ============================================================================
+
   getState(): AppState {
-    return this.state
+    return this.state;
   }
 
   getTicketsByStatus(status: TicketStatus): Ticket[] {
     return this.state.tickets
       .filter(t => t.status === status)
-      .filter(t => this.state.selectedEpicIds.includes(t.epicId))
+      .filter(t => this.state.selectedEpicIds.length === 0 || this.state.selectedEpicIds.includes(t.epicId));
   }
 
   getTicketById(id: string): Ticket | undefined {
-    return this.state.tickets.find(t => t.id === id)
+    return this.state.tickets.find(t => t.id === id);
   }
 
   getEpicById(id: string): Epic | undefined {
-    return this.state.epics.find(e => e.id === id)
+    return this.state.epics.find(e => e.id === id);
   }
 
   getAgentById(id: string): Agent | undefined {
-    return this.state.agents.find(a => a.id === id)
+    return this.state.agents.find(a => a.id === id);
   }
 
   setCurrentView(view: AppState['currentView']) {
-    this.state.currentView = view
+    this.state.currentView = view;
+    this.notifyChange();
   }
 
   setSelectedTicket(ticketId?: string) {
-    this.state.selectedTicketId = ticketId
+    this.state.selectedTicketId = ticketId;
+    this.notifyChange();
   }
 
   setSelectedColumn(index: number) {
-    this.state.selectedColumnIndex = index
+    this.state.selectedColumnIndex = index;
+    this.notifyChange();
   }
 
   setSelectedTicketIndex(index: number) {
-    this.state.selectedTicketIndex = index
+    this.state.selectedTicketIndex = index;
+    this.notifyChange();
   }
 
   setViewingTicketId(ticketId?: string) {
-    this.state.viewingTicketId = ticketId
+    this.state.viewingTicketId = ticketId;
+    this.notifyChange();
   }
 
   setTicketViewTab(tab: 'ticket' | 'session') {
-    this.state.ticketViewTab = tab
+    this.state.ticketViewTab = tab;
+    this.notifyChange();
   }
 
   setSelectedAgentIndex(index: number) {
-    this.state.selectedAgentIndex = index
+    this.state.selectedAgentIndex = index;
+    this.notifyChange();
   }
 
   setSelectedLogIndex(index: number) {
-    this.state.selectedLogIndex = index
+    this.state.selectedLogIndex = index;
+    this.notifyChange();
   }
 
   setPlanViewActivePane(pane: 'chat' | 'docs') {
-    this.state.planViewActivePane = pane
+    this.state.planViewActivePane = pane;
+    this.notifyChange();
   }
 
   setPlanViewActiveDoc(doc: 'prd' | 'plan' | 'tickets') {
-    this.state.planViewActiveDoc = doc
+    this.state.planViewActiveDoc = doc;
+    this.notifyChange();
   }
 
   setRefineViewActivePane(pane: 'sidebar' | 'chat') {
-    this.state.refineViewActivePane = pane
+    this.state.refineViewActivePane = pane;
+    this.notifyChange();
   }
 
   setRefineViewSelectedTicket(index: number) {
-    this.state.refineViewSelectedTicket = index
+    this.state.refineViewSelectedTicket = index;
+    this.notifyChange();
   }
 
-  // Simulation methods
-  updateAgentProgress() {
-    for (const agent of this.state.agents) {
-      if (agent.status === 'working' && agent.progress < 100) {
-        agent.progress = Math.min(100, agent.progress + Math.random() * 5)
-      }
-    }
-  }
-
-  addRandomLogEntry() {
-    const levels: LogEntry['level'][] = ['INFO', 'INFO', 'INFO', 'WARN', 'EVENT']
-    const agents = ['a1', 'a2', 'a3']
-    const actions = [
-      'Reading file: src/utils/helpers.ts',
-      'Writing file: src/components/Button.tsx',
-      'Running tests...',
-      'Code review completed',
-      'Fixing lint errors',
-    ]
-
-    const now = new Date()
-    const timestamp = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
-
-    const newLog: LogEntry = {
-      id: `l${this.state.logs.length + 1}`,
-      timestamp,
-      level: levels[Math.floor(Math.random() * levels.length)],
-      agentId: agents[Math.floor(Math.random() * agents.length)],
-      ticketNumber: Math.floor(Math.random() * 10) + 35,
-      message: actions[Math.floor(Math.random() * actions.length)],
-    }
-
-    this.state.logs.unshift(newLog)
-    if (this.state.logs.length > 50) {
-      this.state.logs.pop()
-    }
-  }
+  // Removed simulation methods (updateAgentProgress, addRandomLogEntry)
+  // Real data now comes from events
 }

@@ -2,6 +2,7 @@ import { join, resolve } from 'node:path'
 import { existsSync } from 'node:fs'
 import { App } from './app.js'
 import { loadConfig } from './core/config.js'
+import { registerShutdownHandlers } from './core/shutdown.js'
 
 // Version from package.json
 const VERSION = '0.1.0'
@@ -100,6 +101,26 @@ async function main() {
     console.error('Create a PLAN.md file or use a different project directory.')
     process.exit(1)
   }
+
+  // Register graceful shutdown handlers for SIGINT/SIGTERM
+  // Note: Full shutdown integration with Orchestrator will be added when T008 is complete
+  // For now, we register handlers that will work with App-level cleanup
+  registerShutdownHandlers({
+    onShutdownStart: () => {
+      // The App will handle its own cleanup when process exits
+      // This is called before the process.exit(0) in shutdown.ts
+    },
+    onShutdownComplete: (summary) => {
+      console.log('\n')
+      console.log('=== ORCH Shutdown Summary ===')
+      console.log(`Agents stopped: ${summary.agentsStopped}`)
+      console.log(`Tickets in progress: ${summary.ticketsInProgress}`)
+      if (summary.totalCost > 0) {
+        console.log(`Total cost: $${summary.totalCost.toFixed(4)}`)
+      }
+      console.log('Goodbye!')
+    },
+  })
 
   // Start the TUI app
   const app = new App()

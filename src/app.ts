@@ -21,6 +21,7 @@ import { createLogsView, getLogCount } from './views/LogsView.js'
 import { createPlanView } from './views/PlanView.js'
 import { createRefineView } from './views/RefineView.js'
 import type { AppState } from './state/types.js'
+import { triggerShutdown } from './core/shutdown.js'
 
 export class App {
   private renderer!: CliRenderer
@@ -484,20 +485,18 @@ export class App {
   }
 
   private startSimulation() {
-    // Update agent progress every 2 seconds
-    setInterval(() => {
-      this.store.updateAgentProgress()
+    // Register onChange callback to trigger UI re-renders
+    // when state changes from events (plan:loaded, agent:progress, etc.)
+    this.store.onChange(() => {
       this.renderer.requestRender()
-    }, 2000)
-
-    // Add random log entry every 5 seconds
-    setInterval(() => {
-      this.store.addRandomLogEntry()
-    }, 5000)
+    })
   }
 
-  private quit() {
+  private async quit() {
+    // Destroy the renderer first to restore terminal
     this.renderer.destroy()
-    process.exit(0)
+
+    // Trigger graceful shutdown (stops agents, shows summary, exits)
+    await triggerShutdown()
   }
 }
