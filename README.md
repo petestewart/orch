@@ -1,5 +1,10 @@
 # ORCH - AI Agent Orchestrator
 
+![Status](https://img.shields.io/badge/status-under%20construction-yellow)
+![Version](https://img.shields.io/badge/version-0.1.0-blue)
+
+> **Under Construction** - This project is in early development and not yet ready for use. APIs and features may change significantly.
+
 A terminal-based orchestration tool that coordinates multiple autonomous Claude Code agents working on a software project simultaneously.
 
 ## What is ORCH?
