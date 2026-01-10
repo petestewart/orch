@@ -1,0 +1,44 @@
+{
+  "$schema": "./orch.config.schema.json",
+
+  "maxAgents": 5,
+  "agentModel": "sonnet",
+  "planFile": "PLAN.md",
+  "logLevel": "info",
+
+  "automation": {
+    "ticketProgression": "automatic",
+
+    "review": {
+      "mode": "automatic",
+      "model": "sonnet"
+    },
+
+    "qa": {
+      "mode": "automatic",
+      "model": "sonnet"
+    },
+
+    "planAudit": {
+      "onRefineViewEntry": true
+    }
+  },
+
+  "costLimit": {
+    "perTicket": 5.00,
+    "perSession": 50.00,
+    "action": "pause"
+  },
+
+  "epics": {
+    "autoCreateWorktrees": true,
+    "maxWorktreesPerEpic": 3,
+    "cleanupOnMerge": true
+  },
+
+  "ui": {
+    "defaultView": "kanban",
+    "refreshInterval": 1000,
+    "showCostInStatusBar": true
+  }
+}

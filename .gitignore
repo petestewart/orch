@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+.bun/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Lock files (regenerated on install)
+bun.lock
+package-lock.json
+yarn.lock
+
+# Environment and secrets
+.env
+.env.*
+*.local
+
+# IDE and editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Claude Code session data
+.claude/
+
+# Logs
+*.log
+logs/
+
+# Test coverage
+coverage/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
