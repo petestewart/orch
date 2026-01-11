@@ -34,7 +34,7 @@ function layoutChatInput(text: string, cursorIndex: number, maxLines: number): {
   return { lines: visibleLines, lineCount: Math.max(1, visibleLines.length) }
 }
 
-function formatLine(prompt: string, line: string, textColor: string, showCursor: boolean): object {
+function formatLine(prompt: string, line: string, textColor: string, showCursor: boolean): any {
   const safeLine = showCursor ? line : line.replace(CURSOR_TOKEN, '')
   const parts = safeLine.split(CURSOR_TOKEN)
   if (parts.length === 1) {
@@ -84,7 +84,7 @@ export function renderChatInputContent(options: {
   inactiveColor: string
   prompt?: string
   multilineMode?: boolean // T041: Enable multiline mode (default: true)
-}): { lines: object[]; lineCount: number } {
+}): { lines: any[]; lineCount: number } {
   const {
     text,
     cursorIndex,
