@@ -1077,9 +1077,26 @@ Could you please provide more details about what you'd like to accomplish?`
       return
     }
 
-    // Escape closes audit panel or cancels editing
+    // 'n' key opens manual ticket creation dialog (T039)
+    if (key.name === 'n' && !state.editingProposal && allowChatShortcut) {
+      this.store.openManualTicketCreateDialog()
+      this.renderCurrentView()
+      return
+    }
+
+    // Ctrl+S saves the manual ticket creation (T039)
+    if (key.ctrl && key.name === 's' && state.manualTicketCreateDialog?.isOpen) {
+      this.saveManuallyCreatedTicket()
+      return
+    }
+
+    // Escape closes audit panel, dialog, or cancels editing
     if (key.name === 'escape') {
-      if (state.editingProposal) {
+      if (state.manualTicketCreateDialog?.isOpen) {
+        // T039: Close manual ticket creation dialog
+        this.store.closeManualTicketCreateDialog()
+        needsRerender = true
+      } else if (state.editingProposal) {
         this.store.cancelEditingProposal()
         needsRerender = true
       } else if (state.refineViewActivePane === 'audit') {
@@ -1467,6 +1484,65 @@ Could you please provide more details about what you'd like to accomplish?`
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       this.store.addRefineViewAIMessage(
         `Failed to create tickets: ${errorMessage}`
+      )
+      this.renderCurrentView()
+    }
+  }
+
+  /**
+   * Save a manually created ticket from the dialog (T039)
+   */
+  private async saveManuallyCreatedTicket(): Promise<void> {
+    const state = this.store.getState()
+    const dialog = state.manualTicketCreateDialog
+
+    if (!dialog || !dialog.title) {
+      return // Can't save without title
+    }
+
+    try {
+      // Load plan store if not cached
+      if (!this.cachedPlan) {
+        const planStore = new PlanStore(`${this.projectPath}/PLAN.md`)
+        this.cachedPlan = await planStore.load()
+      }
+
+      // Create a new PlanStore instance for writing
+      const planStore = new PlanStore(`${this.projectPath}/PLAN.md`)
+      await planStore.load()
+
+      // Map UI priority to core priority
+      const mapPriority = (priority: 'P1' | 'P2' | 'P3'): TicketPriority => {
+        if (priority === 'P3') return 'P2'
+        return priority as TicketPriority
+      }
+
+      // Create the ticket
+      const created = await planStore.createTicket({
+        title: dialog.title,
+        description: dialog.description || undefined,
+        priority: mapPriority(dialog.priority),
+        epic: dialog.epic || undefined,
+        acceptanceCriteria: dialog.acceptanceCriteria,
+        validationSteps: dialog.dependencies, // T039: Use dependencies as validation steps
+        dependencies: [],
+        status: 'Todo',
+      })
+
+      // Update cached plan
+      this.cachedPlan = planStore.getPlan()
+
+      // Close dialog and show success
+      this.store.closeManualTicketCreateDialog()
+      this.store.addRefineViewAIMessage(
+        `✓ Created ticket ${created.id}: ${dialog.title}\n\nThe ticket has been added to PLAN.md.`
+      )
+
+      this.renderCurrentView()
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      this.store.addRefineViewAIMessage(
+        `✗ Failed to create ticket: ${errorMessage}`
       )
       this.renderCurrentView()
     }
