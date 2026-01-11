@@ -550,6 +550,267 @@ export class AgentManager {
       ...config,
     };
   }
+
+  // ===========================================================================
+  // T036: Refine Agent Methods
+  // ===========================================================================
+
+  /**
+   * Spawn a Refine Agent for AI-assisted ticket creation/refinement
+   *
+   * Unlike regular spawn(), this creates an interactive agent that:
+   * - Has context of the current PLAN.md and epic structure
+   * - Can read the codebase to understand context
+   * - Uses a specialized prompt for ticket creation
+   * - Streams responses in real-time via the event bus
+   *
+   * @returns RefineAgentResult with agent ID, output promise, and stop function
+   */
+  async spawnRefineAgent(options: RefineAgentOptions): Promise<RefineAgentResult> {
+    // Generate unique agent ID
+    agentIdCounter++;
+    const agentId = `refine-agent-${agentIdCounter}`;
+
+    // Build the specialized refine prompt
+    const prompt = buildRefinePrompt(
+      options.planContent,
+      options.existingTicketIds,
+      options.epics,
+      options.workingDirectory,
+      options.userMessage
+    );
+
+    // Create agent record
+    const agent: Agent = {
+      id: agentId,
+      type: 'Refine',
+      status: 'Starting',
+      ticketId: undefined, // Refine agents don't work on a specific ticket
+      workingDirectory: options.workingDirectory,
+      startedAt: new Date(),
+      tokensUsed: 0,
+      cost: 0,
+      progress: 0,
+    };
+
+    // Store agent record, output buffer, and initialize metrics
+    this.agents.set(agentId, agent);
+    this.outputBuffers.set(agentId, []);
+    this.metricsMap.set(agentId, {
+      tokensUsed: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cost: 0,
+      elapsedMs: 0,
+    });
+
+    // Build command args
+    const model = options.model || this.defaultModel;
+    const args = [
+      'claude',
+      '--print',
+      '--dangerously-skip-permissions',
+      '-p',
+      prompt,
+    ];
+
+    // Add model if specified and not default
+    if (model && model !== 'sonnet') {
+      args.push('--model', model);
+    }
+
+    // Create promise that resolves when agent completes
+    let resolveOutput: (value: string) => void;
+    let rejectOutput: (error: Error) => void;
+    const outputPromise = new Promise<string>((resolve, reject) => {
+      resolveOutput = resolve;
+      rejectOutput = reject;
+    });
+
+    try {
+      // Spawn the subprocess using Bun.spawn
+      const proc = Bun.spawn(args, {
+        cwd: options.workingDirectory,
+        stdout: 'pipe',
+        stderr: 'pipe',
+        env: process.env,
+      });
+
+      // Store the process and update agent with PID
+      this.processes.set(agentId, proc);
+      agent.pid = proc.pid;
+      agent.status = 'Working';
+
+      // Set up stdout streaming with real-time events
+      this.streamRefineOutput(agentId, proc.stdout, 'stdout');
+
+      // Set up stderr streaming
+      this.streamOutput(agentId, proc.stderr, 'stderr');
+
+      // Handle process exit
+      proc.exited.then((exitCode) => {
+        const output = this.getOutputAsString(agentId);
+        this.handleRefineProcessExit(agentId, exitCode);
+
+        if (exitCode === 0) {
+          resolveOutput(output);
+        } else {
+          rejectOutput(new Error(`Refine agent exited with code ${exitCode}`));
+        }
+      });
+
+      // Emit agent:spawned event
+      getEventBus().publish({
+        type: 'agent:spawned',
+        timestamp: new Date(),
+        agentId,
+        ticketId: '',
+      });
+
+      // Return result with control methods
+      return {
+        agentId,
+        output: outputPromise,
+        stop: async () => {
+          await this.stop(agentId);
+          rejectOutput(new Error('Agent stopped by user'));
+        },
+      };
+    } catch (error) {
+      // Clean up on spawn failure
+      this.agents.delete(agentId);
+      this.outputBuffers.delete(agentId);
+      this.metricsMap.delete(agentId);
+      throw error;
+    }
+  }
+
+  /**
+   * Stream output from Refine agent with real-time progress events
+   * Emits agent:progress events for each chunk so UI can display streaming responses
+   */
+  private async streamRefineOutput(
+    agentId: string,
+    stream: ReadableStream<Uint8Array> | null,
+    type: 'stdout' | 'stderr'
+  ): Promise<void> {
+    if (!stream) return;
+
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const content = decoder.decode(value, { stream: true });
+        const output: AgentOutput = {
+          type,
+          content,
+          timestamp: new Date(),
+        };
+
+        // Add to buffer
+        const buffer = this.outputBuffers.get(agentId);
+        if (buffer) {
+          buffer.push(output);
+        }
+
+        // Parse token metrics from output
+        this.updateMetricsFromOutput(agentId, content);
+
+        // Emit progress event with the new content chunk
+        // This allows the UI to display streaming responses in real-time
+        const agent = this.agents.get(agentId);
+        const metrics = this.metricsMap.get(agentId);
+        if (agent) {
+          agent.lastAction = content;
+          getEventBus().publish({
+            type: 'agent:progress',
+            timestamp: new Date(),
+            agentId,
+            ticketId: '',
+            progress: agent.progress,
+            lastAction: content, // Full chunk for streaming display
+            tokensUsed: agent.tokensUsed,
+            inputTokens: metrics?.inputTokens || 0,
+            outputTokens: metrics?.outputTokens || 0,
+            cost: agent.cost,
+          });
+        }
+      }
+    } catch {
+      // Stream closed or errored - this is normal when process exits
+    }
+  }
+
+  /**
+   * Handle Refine agent process exit
+   */
+  private handleRefineProcessExit(agentId: string, exitCode: number): void {
+    const agent = this.agents.get(agentId);
+    if (!agent) return;
+
+    // Clean up process reference
+    this.processes.delete(agentId);
+
+    if (exitCode === 0) {
+      agent.status = 'Complete';
+      agent.progress = 100;
+      getEventBus().publish({
+        type: 'agent:completed',
+        timestamp: new Date(),
+        agentId,
+        ticketId: '',
+      });
+    } else {
+      agent.status = 'Failed';
+      const errorMessage = `Refine agent exited with code ${exitCode}`;
+      getEventBus().publish({
+        type: 'agent:failed',
+        timestamp: new Date(),
+        agentId,
+        ticketId: '',
+        error: errorMessage,
+      });
+    }
+  }
+
+  /**
+   * Send a follow-up message to an existing Refine agent
+   * This is used for multi-turn conversations
+   *
+   * Note: Claude CLI --print mode doesn't support multi-turn conversations directly.
+   * For a true multi-turn experience, we spawn a new agent with conversation history.
+   */
+  async sendRefineMessage(
+    previousOutput: string,
+    userMessage: string,
+    options: Omit<RefineAgentOptions, 'userMessage'>
+  ): Promise<RefineAgentResult> {
+    // Build a prompt that includes the previous conversation
+    const conversationPrompt = `${buildRefinePrompt(
+      options.planContent,
+      options.existingTicketIds,
+      options.epics,
+      options.workingDirectory
+    )}
+
+## Previous Conversation
+${previousOutput}
+
+## User's Follow-up
+${userMessage}
+
+Please continue helping the user based on the conversation above.`;
+
+    // Spawn a new agent with the conversation context
+    return this.spawnRefineAgent({
+      ...options,
+      userMessage: conversationPrompt,
+    });
+  }
 }
 
 // =============================================================================
@@ -1153,6 +1414,112 @@ export function parseTokenUsage(
   }
 
   return null;
+}
+
+// =============================================================================
+// Refine Agent - T036
+// =============================================================================
+
+export interface RefineAgentOptions {
+  /** Working directory for the agent */
+  workingDirectory: string;
+  /** Current PLAN.md content for context */
+  planContent: string;
+  /** List of existing tickets for context */
+  existingTicketIds: string[];
+  /** List of epics with their paths */
+  epics: { name: string; path: string; description?: string }[];
+  /** Model to use (defaults to sonnet) */
+  model?: string;
+  /** Initial user message to start the conversation */
+  userMessage?: string;
+}
+
+export interface RefineAgentResult {
+  agentId: string;
+  /** Promise that resolves with the full output when agent completes */
+  output: Promise<string>;
+  /** Stop the agent */
+  stop: () => Promise<void>;
+}
+
+/**
+ * Build the prompt for a Refine agent
+ * Includes project context, PLAN.md structure, and ticket creation instructions
+ */
+export function buildRefinePrompt(
+  planContent: string,
+  existingTicketIds: string[],
+  epics: { name: string; path: string; description?: string }[],
+  projectPath: string,
+  userMessage?: string
+): string {
+  const epicList = epics.length > 0
+    ? epics.map(e => `- **${e.name}**: ${e.path}${e.description ? ` - ${e.description}` : ''}`).join('\n')
+    : '(No epics defined)';
+
+  const ticketIdList = existingTicketIds.length > 0
+    ? existingTicketIds.join(', ')
+    : '(No existing tickets)';
+
+  const userRequest = userMessage
+    ? `\n## User Request\n${userMessage}`
+    : '';
+
+  return `You are an AI assistant helping to create and refine tickets for a project.
+
+## Project Context
+Working directory: ${projectPath}
+
+## Available Epics
+${epicList}
+
+## Existing Ticket IDs
+${ticketIdList}
+
+## Current PLAN.md Structure
+The project uses a PLAN.md file to track tickets. Here's the current content for reference:
+\`\`\`markdown
+${planContent.slice(0, 5000)}${planContent.length > 5000 ? '\n... (truncated)' : ''}
+\`\`\`
+${userRequest}
+
+## Your Role
+Help the user create well-structured tickets for their project. When proposing tickets, use this exact format:
+
+## Proposed Ticket: [Clear, actionable title]
+- **Priority:** P0|P1|P2 (P0=critical, P1=high, P2=medium)
+- **Epic:** [epic name from the list above, or leave blank if uncertain]
+- **Description:** [Brief scope description of what this ticket accomplishes]
+- **Acceptance Criteria:**
+  - [Measurable criterion 1]
+  - [Measurable criterion 2]
+- **Validation Steps:**
+  - [Command or test to verify, e.g., \`bun run typecheck\` passes]
+  - [Another validation command]
+- **Dependencies:** [comma-separated ticket IDs if any, e.g., T001, T002]
+
+## Guidelines for Good Tickets
+1. **Keep tickets focused** - Each ticket should be 1-2 days of work maximum
+2. **Testable acceptance criteria** - Each criterion should be verifiable
+3. **Include validation steps** - Commands that can verify the work is complete
+4. **Assign appropriate epic** - Match the ticket to the relevant code area
+5. **Identify dependencies** - List any tickets that must complete first
+6. **Use clear titles** - Titles should describe the outcome, not the task
+
+## Exploring the Codebase
+You can read files in the codebase to understand the project structure before proposing tickets.
+This helps you:
+- Assign the correct epic based on file paths
+- Understand existing patterns to follow
+- Identify related code that might need updates
+- Ensure acceptance criteria are appropriate
+
+## When Proposing Multiple Tickets
+If a user's request requires multiple tickets, propose them all with clear dependencies.
+Number your proposals and explain how they relate to each other.
+
+Now, help the user create or refine tickets for their project.`;
 }
 
 /**

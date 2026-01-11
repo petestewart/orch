@@ -2,6 +2,8 @@ import {
   BoxRenderable,
   TextRenderable,
   ScrollBoxRenderable,
+  InputRenderable,
+  InputRenderableEvents,
   t,
   fg,
   bold,
@@ -11,16 +13,18 @@ import {
 import { colors } from '../utils/colors.js'
 import { createChatPanel } from '../components/ChatPanel.js'
 import type { Store } from '../state/store.js'
-import type { ChatMessage, Ticket, AuditFindingUI } from '../state/types.js'
+import type { ChatMessage, Ticket, AuditFindingUI, TicketProposalUI } from '../state/types.js'
 
 export interface RefineViewProps {
   store: Store
   selectedTicketIndex: number
   activePane: 'sidebar' | 'chat' | 'audit'
+  /** T036: Callback when user sends a message in the chat */
+  onSendMessage?: (content: string) => void
 }
 
 export function createRefineView(ctx: RenderContext, props: RefineViewProps): BoxRenderable {
-  const { store, selectedTicketIndex, activePane } = props
+  const { store, selectedTicketIndex, activePane, onSendMessage } = props
   const state = store.getState()
   const tickets = state.tickets
 
@@ -176,8 +180,10 @@ export function createRefineView(ctx: RenderContext, props: RefineViewProps): Bo
       gap: 0,
     })
 
-    // Create refinement messages for the selected ticket
-    const refinementMessages = selectedTicket ? createRefinementMessages(selectedTicket) : []
+    // Use store's chat messages for ticket creation (T035)
+    const chatMessages = state.refineViewChatMessages
+    const proposals = state.ticketProposals
+    const selectedProposalIndex = state.selectedProposalIndex
 
     // Wrap chat panel with active border indicator
     const chatWrapper = new BoxRenderable(ctx, {
@@ -191,18 +197,24 @@ export function createRefineView(ctx: RenderContext, props: RefineViewProps): Bo
       padding: 0,
     })
 
-    // Create chat panel (without its own border since we wrap it)
-    const chatPanel = createChatPanelInner(ctx, {
-      messages: refinementMessages,
-      onSendMessage: undefined, // Mock implementation - real AI integration in T036
-      placeholder: 'Refine this ticket...',
+    // Create chat panel with proposals support (T035, T036)
+    const chatPanel = createTicketCreationChat(ctx, {
+      messages: chatMessages,
+      proposals,
+      selectedProposalIndex,
+      isActive: activePane === 'chat',
+      onSendMessage, // T036: Connect to Refine Agent
     })
     chatWrapper.add(chatPanel)
     chatContainer.add(chatWrapper)
 
-    // Chat footer with hints
+    // Chat footer with hints - show different hints based on state
+    const hasProposals = proposals.length > 0
+    const footerHint = hasProposals
+      ? 'j/k: nav  Space: select  c: create  e: edit  Shift+A: audit'
+      : 'Type to describe a task  Shift+A: audit plan'
     const chatFooter = new TextRenderable(ctx, {
-      content: t`${dim(fg(colors.textMuted)('Shift+A: audit plan'))}`,
+      content: t`${dim(fg(colors.textMuted)(footerHint))}`,
     })
     chatContainer.add(chatFooter)
 
@@ -537,6 +549,261 @@ function createChatPanelInner(ctx: RenderContext, props: { messages: ChatMessage
     content: t`${dim(fg(colors.textMuted)('[AI integration in T036]'))}`,
   })
   container.add(inputHint)
+
+  return container
+}
+
+/**
+ * Props for ticket creation chat panel (T035, T036)
+ */
+interface TicketCreationChatProps {
+  messages: ChatMessage[]
+  proposals: TicketProposalUI[]
+  selectedProposalIndex: number
+  isActive: boolean
+  /** T036: Callback when user sends a message */
+  onSendMessage?: (content: string) => void
+}
+
+/**
+ * Create a chat panel for AI-assisted ticket creation (T035, T036)
+ */
+function createTicketCreationChat(ctx: RenderContext, props: TicketCreationChatProps): BoxRenderable {
+  const { messages, proposals, selectedProposalIndex, isActive, onSendMessage } = props
+
+  const container = new BoxRenderable(ctx, {
+    width: '100%',
+    height: '100%',
+    flexDirection: 'column',
+    backgroundColor: colors.bgDark,
+    padding: 1,
+    gap: 1,
+  })
+
+  // Header
+  const header = new TextRenderable(ctx, {
+    content: t`${bold(fg(colors.cyan)('Create Ticket'))}`,
+  })
+  container.add(header)
+
+  // Content scroll area
+  const contentArea = new ScrollBoxRenderable(ctx, {
+    width: '100%',
+    flexGrow: 1,
+    flexDirection: 'column',
+    gap: 1,
+    backgroundColor: colors.bgDark,
+    padding: 0,
+  })
+
+  // Show chat messages
+  messages.forEach((message) => {
+    const messageBox = new BoxRenderable(ctx, {
+      width: '100%',
+      flexDirection: 'column',
+      gap: 0,
+      marginBottom: 1,
+    })
+
+    // Role label with color coding
+    const roleColor = message.role === 'user' ? colors.cyan : colors.green
+    const roleLabel = new TextRenderable(ctx, {
+      content: t`${fg(roleColor)(message.role === 'user' ? 'You' : 'Assistant')}:`,
+    })
+    messageBox.add(roleLabel)
+
+    // Message content (truncate long messages)
+    const contentColor = message.role === 'user' ? colors.text : colors.textMuted
+    const displayContent = message.content.length > 200
+      ? message.content.slice(0, 197) + '...'
+      : message.content
+    const contentText = new TextRenderable(ctx, {
+      content: t`${fg(contentColor)(displayContent)}`,
+    })
+    messageBox.add(contentText)
+
+    contentArea.add(messageBox)
+  })
+
+  // Show proposals if any
+  if (proposals.length > 0) {
+    // Proposals header
+    const proposalsHeader = new BoxRenderable(ctx, {
+      width: '100%',
+      flexDirection: 'row',
+      gap: 1,
+      marginTop: 1,
+    })
+    const proposalsTitle = new TextRenderable(ctx, {
+      content: t`${bold(fg(colors.yellow)('Proposed Tickets'))} ${dim(fg(colors.textMuted)(`(${proposals.length})`))}`,
+    })
+    proposalsHeader.add(proposalsTitle)
+    contentArea.add(proposalsHeader)
+
+    // List proposals
+    proposals.forEach((proposal, index) => {
+      const isSelected = index === selectedProposalIndex && isActive
+      const proposalBox = new BoxRenderable(ctx, {
+        width: '100%',
+        flexDirection: 'column',
+        gap: 0,
+        paddingLeft: 1,
+        paddingRight: 1,
+        paddingTop: 0,
+        paddingBottom: 0,
+        backgroundColor: isSelected ? colors.selectedBg : 'transparent',
+        marginBottom: 1,
+      })
+
+      // Proposal title with selection indicator and checkbox
+      const titleRow = new BoxRenderable(ctx, {
+        width: '100%',
+        flexDirection: 'row',
+        gap: 1,
+      })
+
+      // Selection indicator
+      const indicator = new TextRenderable(ctx, {
+        content: t`${fg(isSelected ? colors.yellow : colors.textMuted)(isSelected ? '>' : ' ')}`,
+      })
+      titleRow.add(indicator)
+
+      // Checkbox
+      const checkbox = new TextRenderable(ctx, {
+        content: t`${fg(proposal.selected ? colors.green : colors.textMuted)(proposal.selected ? '[x]' : '[ ]')}`,
+      })
+      titleRow.add(checkbox)
+
+      // Priority badge
+      const priorityColor = proposal.priority === 'P1' ? colors.red : proposal.priority === 'P2' ? colors.yellow : colors.textMuted
+      const priority = new TextRenderable(ctx, {
+        content: t`${fg(priorityColor)(proposal.priority)}`,
+      })
+      titleRow.add(priority)
+
+      // Title
+      const title = new TextRenderable(ctx, {
+        content: t`${fg(isSelected ? colors.text : colors.textMuted)(truncate(proposal.title, 35))}`,
+      })
+      titleRow.add(title)
+
+      proposalBox.add(titleRow)
+
+      // Show details for selected proposal
+      if (isSelected) {
+        // Epic
+        if (proposal.epic) {
+          const epicRow = new TextRenderable(ctx, {
+            content: t`  ${dim(fg(colors.textDim)('Epic:'))} ${fg(colors.text)(proposal.epic)}`,
+          })
+          proposalBox.add(epicRow)
+        }
+
+        // Description
+        if (proposal.description) {
+          const descRow = new TextRenderable(ctx, {
+            content: t`  ${dim(fg(colors.textDim)('Scope:'))} ${fg(colors.text)(truncate(proposal.description, 40))}`,
+          })
+          proposalBox.add(descRow)
+        }
+
+        // Acceptance criteria count
+        if (proposal.acceptanceCriteria.length > 0) {
+          const acRow = new TextRenderable(ctx, {
+            content: t`  ${dim(fg(colors.textDim)('AC:'))} ${fg(colors.text)(`${proposal.acceptanceCriteria.length} criteria`)}`,
+          })
+          proposalBox.add(acRow)
+        }
+
+        // Validation steps count
+        if (proposal.validationSteps.length > 0) {
+          const vsRow = new TextRenderable(ctx, {
+            content: t`  ${dim(fg(colors.textDim)('Validation:'))} ${fg(colors.text)(`${proposal.validationSteps.length} steps`)}`,
+          })
+          proposalBox.add(vsRow)
+        }
+
+        // Review status
+        const reviewStatus = new TextRenderable(ctx, {
+          content: t`  ${dim(fg(colors.textDim)('Reviewed:'))} ${fg(proposal.reviewed ? colors.green : colors.yellow)(proposal.reviewed ? 'Yes' : 'No')}`,
+        })
+        proposalBox.add(reviewStatus)
+      }
+
+      contentArea.add(proposalBox)
+    })
+
+    // Summary of selected proposals
+    const selectedCount = proposals.filter(p => p.selected).length
+    if (selectedCount > 0) {
+      const summaryRow = new TextRenderable(ctx, {
+        content: t`${fg(colors.green)(`${selectedCount} ticket(s) selected for creation`)}`,
+      })
+      contentArea.add(summaryRow)
+    }
+  } else if (messages.length === 0) {
+    // Empty state
+    const emptyBox = new BoxRenderable(ctx, {
+      width: '100%',
+      flexDirection: 'column',
+      gap: 1,
+      marginTop: 2,
+    })
+
+    const emptyTitle = new TextRenderable(ctx, {
+      content: t`${fg(colors.textMuted)('Describe a task to create tickets')}`,
+    })
+    emptyBox.add(emptyTitle)
+
+    const emptyHint1 = new TextRenderable(ctx, {
+      content: t`${dim(fg(colors.textDim)('Example: "Create a ticket to add user auth"'))}`,
+    })
+    emptyBox.add(emptyHint1)
+
+    const emptyHint2 = new TextRenderable(ctx, {
+      content: t`${dim(fg(colors.textDim)('The AI will help you create well-structured tickets.'))}`,
+    })
+    emptyBox.add(emptyHint2)
+
+    contentArea.add(emptyBox)
+  }
+
+  container.add(contentArea)
+
+  // T036: Add input field for sending messages to the Refine agent
+  if (onSendMessage && isActive) {
+    const inputWrapper = new BoxRenderable(ctx, {
+      width: '100%',
+      flexDirection: 'column',
+      border: true,
+      borderStyle: 'single',
+      borderColor: colors.border,
+      padding: 0,
+      marginTop: 1,
+    })
+
+    const inputField = new InputRenderable(ctx, {
+      width: '100%',
+      height: 1,
+      placeholder: 'Describe a task to create tickets...',
+      placeholderColor: colors.textMuted,
+      cursorColor: colors.cyan,
+      textColor: colors.text,
+      backgroundColor: colors.activeBg,
+    })
+
+    // Handle message submission
+    inputField.on(InputRenderableEvents.ENTER, (event: unknown) => {
+      const content = inputField.value?.trim()
+      if (content) {
+        onSendMessage(content)
+        inputField.value = ''
+      }
+    })
+
+    inputWrapper.add(inputField)
+    container.add(inputWrapper)
+  }
 
   return container
 }

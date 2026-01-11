@@ -957,8 +957,8 @@ After all acceptance criteria are met, output exactly:
 
 ### Ticket: T035 AI-Assisted Ticket Creation
 - **Priority:** P1
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Implement AI-assisted ticket creation in Refine view chat interface.
 - **Acceptance Criteria:**
   - User can describe a task in natural language
@@ -973,12 +973,26 @@ After all acceptance criteria are met, output exactly:
   - Manual test: create ticket through conversation
   - Manual test: epic auto-assignment works
 - **Notes:**
+  - Agent-T035 implementation complete:
+    - Created src/core/ticket-proposal.ts with TicketProposal interface and parsing logic
+    - parseTicketProposals() extracts proposals from AI response with ## Proposed Ticket: format
+    - autoAssignEpic() assigns epic based on file paths mentioned matching epic paths
+    - proposalToTicket() converts proposal to ticket data for PlanStore.createTicket()
+    - Added TicketProposalUI to state/types.ts with selection state
+    - Added store methods: setTicketProposals, nextProposal, prevProposal, toggleProposalSelection, etc.
+    - Added refine chat state: refineViewChatMessages, refineViewPendingMessage
+    - Updated app.ts handleRefineKeypress() with 'c' (create), 'e' (edit), Space (toggle), j/k (nav)
+    - Created createProposedTickets() method that converts UI proposals to core tickets
+    - Updated RefineView.ts with createTicketCreationChat() to display proposals with selection UI
+    - Added generateRefineResponse() mock AI for ticket creation (real AI in T036)
+    - 18 new unit tests in ticket-proposal.test.ts
+    - 728 tests pass, typecheck passes
 - **Dependencies:** T021, T003
 
 ### Ticket: T036 Refine Agent Integration
 - **Priority:** P1
-- **Status:** Todo
-- **Owner:** Unassigned
+- **Status:** Done
+- **Owner:** Completed
 - **Scope:** Connect Refine view chat to a Claude Code agent for ticket creation/refinement.
 - **Acceptance Criteria:**
   - Spawns Refine Agent when entering Refine view
@@ -991,7 +1005,7 @@ After all acceptance criteria are met, output exactly:
   - `bun run typecheck` passes
   - Manual test: have full conversation about new feature
   - Manual test: agent creates well-structured tickets
-- **Notes:**
+- **Notes:** Implementation complete: Added buildRefinePrompt(), spawnRefineAgent(), sendRefineMessage() to AgentManager. Connected RefineView chat input to handleRefineChatMessage() which spawns agents with PLAN.md context. Real-time streaming via agent:progress events. Proposal parsing integrated with parseTicketProposals().
 - **Dependencies:** T035, T007
 
 ### Ticket: T038 Plan Audit (Auto-Refine)

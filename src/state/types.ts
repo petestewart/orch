@@ -94,6 +94,12 @@ export interface AppState {
   // Refine view state
   refineViewActivePane: 'sidebar' | 'chat' | 'audit'
   refineViewSelectedTicket: number
+  refineViewChatMessages: ChatMessage[]  // T035: Chat messages for ticket creation
+  refineViewPendingMessage: boolean  // T035: Waiting for AI response
+  // T035: AI-Assisted Ticket Creation state
+  ticketProposals: TicketProposalUI[]  // Proposed tickets from AI
+  selectedProposalIndex: number  // Index of selected proposal
+  editingProposal?: TicketProposalUI  // Proposal being edited (for 'e' key)
   // Kanban epic grouping state (T034)
   kanbanEpicFilter?: string  // undefined = show all, string = filter by specific epic
   kanbanCollapsedEpics: Set<string>  // Set of epic IDs that are collapsed
@@ -134,4 +140,18 @@ export interface AuditFindingUI {
   ticketId?: string
   suggestedAction: AuditAction
   suggestedTicketTitle?: string
+}
+
+// Ticket Proposal types (T035: AI-Assisted Ticket Creation)
+export interface TicketProposalUI {
+  tempId: string
+  title: string
+  description?: string
+  priority: Priority
+  epic?: string
+  acceptanceCriteria: string[]
+  validationSteps: string[]
+  dependencies: string[]
+  reviewed: boolean
+  selected: boolean  // Whether this proposal is selected for creation
 }

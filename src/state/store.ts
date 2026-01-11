@@ -7,7 +7,7 @@
  * Implements: T010
  */
 
-import type { AppState, Epic, Ticket, Agent, LogEntry, TicketStatus, AuditFindingUI, TicketAutomationMode, ChatMessage } from './types.js';
+import type { AppState, Epic, Ticket, Agent, LogEntry, TicketStatus, AuditFindingUI, TicketAutomationMode, ChatMessage, TicketProposalUI } from './types.js';
 import type {
   Ticket as CoreTicket,
   Agent as CoreAgent,
@@ -228,6 +228,12 @@ export class Store {
       // Refine view state
       refineViewActivePane: 'sidebar',
       refineViewSelectedTicket: 0,
+      refineViewChatMessages: [],
+      refineViewPendingMessage: false,
+      // T035: AI-Assisted Ticket Creation state
+      ticketProposals: [],
+      selectedProposalIndex: 0,
+      editingProposal: undefined,
       // Kanban epic grouping state (T034)
       kanbanEpicFilter: undefined,
       kanbanCollapsedEpics: new Set<string>(),
@@ -1267,5 +1273,239 @@ export class Store {
   hideHelpOverlay(): void {
     this.state.showHelpOverlay = false;
     this.notifyChange();
+  }
+
+  // ============================================================================
+  // AI-Assisted Ticket Creation (T035)
+  // ============================================================================
+
+  /**
+   * Add a user message to the refine view chat
+   */
+  addRefineViewUserMessage(content: string): void {
+    const message: ChatMessage = {
+      id: `refine-msg-${Date.now()}`,
+      role: 'user',
+      content,
+      timestamp: this.formatTimestamp(new Date()),
+    };
+    this.state.refineViewChatMessages.push(message);
+    this.state.refineViewPendingMessage = true;
+    this.notifyChange();
+  }
+
+  /**
+   * Add an AI response to the refine view chat
+   */
+  addRefineViewAIMessage(content: string): void {
+    const message: ChatMessage = {
+      id: `refine-msg-${Date.now()}`,
+      role: 'assistant',
+      content,
+      timestamp: this.formatTimestamp(new Date()),
+    };
+    this.state.refineViewChatMessages.push(message);
+    this.state.refineViewPendingMessage = false;
+    this.notifyChange();
+  }
+
+  /**
+   * Get refine view chat messages
+   */
+  getRefineViewChatMessages(): ChatMessage[] {
+    return this.state.refineViewChatMessages;
+  }
+
+  /**
+   * Check if waiting for AI response in refine view
+   */
+  isRefineViewPendingMessage(): boolean {
+    return this.state.refineViewPendingMessage;
+  }
+
+  /**
+   * Clear refine view chat messages
+   */
+  clearRefineViewChat(): void {
+    this.state.refineViewChatMessages = [];
+    this.state.refineViewPendingMessage = false;
+    this.state.ticketProposals = [];
+    this.state.selectedProposalIndex = 0;
+    this.state.editingProposal = undefined;
+    this.notifyChange();
+  }
+
+  /**
+   * Set ticket proposals from AI response
+   */
+  setTicketProposals(proposals: TicketProposalUI[]): void {
+    this.state.ticketProposals = proposals;
+    this.state.selectedProposalIndex = 0;
+    this.notifyChange();
+  }
+
+  /**
+   * Get current ticket proposals
+   */
+  getTicketProposals(): TicketProposalUI[] {
+    return this.state.ticketProposals;
+  }
+
+  /**
+   * Get selected proposal index
+   */
+  getSelectedProposalIndex(): number {
+    return this.state.selectedProposalIndex;
+  }
+
+  /**
+   * Select next proposal
+   */
+  nextProposal(): void {
+    if (this.state.selectedProposalIndex < this.state.ticketProposals.length - 1) {
+      this.state.selectedProposalIndex++;
+      this.notifyChange();
+    }
+  }
+
+  /**
+   * Select previous proposal
+   */
+  prevProposal(): void {
+    if (this.state.selectedProposalIndex > 0) {
+      this.state.selectedProposalIndex--;
+      this.notifyChange();
+    }
+  }
+
+  /**
+   * Toggle selection of current proposal for creation
+   */
+  toggleProposalSelection(): void {
+    const proposal = this.state.ticketProposals[this.state.selectedProposalIndex];
+    if (proposal) {
+      proposal.selected = !proposal.selected;
+      this.notifyChange();
+    }
+  }
+
+  /**
+   * Select all proposals for creation
+   */
+  selectAllProposals(): void {
+    for (const proposal of this.state.ticketProposals) {
+      proposal.selected = true;
+    }
+    this.notifyChange();
+  }
+
+  /**
+   * Deselect all proposals
+   */
+  deselectAllProposals(): void {
+    for (const proposal of this.state.ticketProposals) {
+      proposal.selected = false;
+    }
+    this.notifyChange();
+  }
+
+  /**
+   * Get proposals selected for creation
+   */
+  getSelectedProposals(): TicketProposalUI[] {
+    return this.state.ticketProposals.filter(p => p.selected);
+  }
+
+  /**
+   * Start editing a proposal
+   */
+  startEditingProposal(proposal: TicketProposalUI): void {
+    this.state.editingProposal = { ...proposal };
+    this.notifyChange();
+  }
+
+  /**
+   * Update the proposal being edited
+   */
+  updateEditingProposal(updates: Partial<TicketProposalUI>): void {
+    if (this.state.editingProposal) {
+      this.state.editingProposal = { ...this.state.editingProposal, ...updates };
+      this.notifyChange();
+    }
+  }
+
+  /**
+   * Cancel editing proposal
+   */
+  cancelEditingProposal(): void {
+    this.state.editingProposal = undefined;
+    this.notifyChange();
+  }
+
+  /**
+   * Save edited proposal back to proposals list
+   */
+  saveEditingProposal(): void {
+    if (this.state.editingProposal) {
+      const index = this.state.ticketProposals.findIndex(
+        p => p.tempId === this.state.editingProposal!.tempId
+      );
+      if (index >= 0) {
+        this.state.editingProposal.reviewed = true;
+        this.state.ticketProposals[index] = this.state.editingProposal;
+      }
+      this.state.editingProposal = undefined;
+      this.notifyChange();
+    }
+  }
+
+  /**
+   * Check if there's a proposal being edited
+   */
+  isEditingProposal(): boolean {
+    return this.state.editingProposal !== undefined;
+  }
+
+  /**
+   * Get the proposal currently being edited
+   */
+  getEditingProposal(): TicketProposalUI | undefined {
+    return this.state.editingProposal;
+  }
+
+  /**
+   * Remove a proposal from the list
+   */
+  removeProposal(tempId: string): void {
+    this.state.ticketProposals = this.state.ticketProposals.filter(p => p.tempId !== tempId);
+    if (this.state.selectedProposalIndex >= this.state.ticketProposals.length) {
+      this.state.selectedProposalIndex = Math.max(0, this.state.ticketProposals.length - 1);
+    }
+    this.notifyChange();
+  }
+
+  /**
+   * Clear all proposals after successful creation
+   */
+  clearProposalsAfterCreation(): void {
+    // Remove only selected proposals that were created
+    this.state.ticketProposals = this.state.ticketProposals.filter(p => !p.selected);
+    this.state.selectedProposalIndex = 0;
+    this.addSystemLog('INFO', 'Tickets created successfully from proposals');
+    this.notifyChange();
+  }
+
+  /**
+   * Check if there are any proposals available
+   */
+  hasProposals(): boolean {
+    return this.state.ticketProposals.length > 0;
+  }
+
+  /**
+   * Check if there are any selected proposals
+   */
+  hasSelectedProposals(): boolean {
+    return this.state.ticketProposals.some(p => p.selected);
   }
 }

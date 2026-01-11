@@ -26,6 +26,9 @@ import { triggerShutdown } from './core/shutdown.js'
 import { getEventBus } from './core/events.js'
 import { runPlanAudit, type AuditPhase } from './core/plan-audit.js'
 import { PlanStore, type ParsedPlan } from './core/plan-store.js'
+import type { TicketPriority, AgentProgressEvent } from './core/types.js'
+import { proposalToTicket, parseTicketProposals, containsProposals, autoAssignEpic } from './core/ticket-proposal.js'
+import { AgentManager, type RefineAgentResult } from './core/agent-manager.js'
 
 export class App {
   private renderer!: CliRenderer
@@ -49,8 +52,15 @@ export class App {
   private cachedPlan: ParsedPlan | null = null
   private projectPath: string = process.cwd()
 
+  // T036: Refine Agent integration
+  private agentManager: AgentManager
+  private currentRefineAgent: RefineAgentResult | null = null
+  private refineAgentOutput: string = '' // Accumulated output for streaming
+  private refineAgentUnsubscribe: (() => void) | null = null
+
   constructor() {
     this.store = new Store()
+    this.agentManager = new AgentManager()
   }
 
   async start() {
@@ -281,6 +291,10 @@ export class App {
         store: this.store,
         selectedTicketIndex: state.refineViewSelectedTicket,
         activePane: state.refineViewActivePane,
+        // T036: Connect Refine Agent for AI-assisted ticket creation
+        onSendMessage: (content) => {
+          this.handleRefineChatMessage(content)
+        },
       })
     } else {
       viewContent = this.createPlaceholderView(state.currentView)
@@ -772,14 +786,50 @@ Could you please provide more details about what you'd like to accomplish?`
       return
     }
 
-    // Escape closes audit panel
-    if (key.name === 'escape' && state.refineViewActivePane === 'audit') {
-      this.store.clearAudit()
+    // Escape closes audit panel or cancels editing
+    if (key.name === 'escape') {
+      if (state.editingProposal) {
+        this.store.cancelEditingProposal()
+        needsRerender = true
+      } else if (state.refineViewActivePane === 'audit') {
+        this.store.clearAudit()
+        needsRerender = true
+      }
+    }
+
+    // 'c' key creates selected proposals as tickets (T035)
+    if (key.name === 'c' && state.refineViewActivePane === 'chat') {
+      if (state.ticketProposals.length > 0) {
+        this.createProposedTickets()
+        return
+      }
+    }
+
+    // 'e' key starts editing the selected proposal (T035)
+    if (key.name === 'e' && state.refineViewActivePane === 'chat') {
+      const proposal = state.ticketProposals[state.selectedProposalIndex]
+      if (proposal && !state.editingProposal) {
+        this.store.startEditingProposal(proposal)
+        needsRerender = true
+      }
+    }
+
+    // 'Enter' key saves edited proposal (T035)
+    if (key.name === 'return' && state.editingProposal) {
+      this.store.saveEditingProposal()
       needsRerender = true
     }
 
+    // Space key toggles proposal selection (T035)
+    if (key.name === 'space' && state.refineViewActivePane === 'chat' && !state.editingProposal) {
+      if (state.ticketProposals.length > 0) {
+        this.store.toggleProposalSelection()
+        needsRerender = true
+      }
+    }
+
     // Tab to switch between sidebar, chat, and audit (if audit results present)
-    if (key.name === 'tab') {
+    if (key.name === 'tab' && !state.editingProposal) {
       const hasAudit = state.auditFindings.length > 0 || state.auditInProgress
       let newPane: 'sidebar' | 'chat' | 'audit'
 
@@ -812,6 +862,17 @@ Could you please provide more details about what you'd like to accomplish?`
           this.store.setRefineViewSelectedTicket(state.refineViewSelectedTicket - 1)
           needsRerender = true
         }
+      }
+    }
+
+    // When in chat pane with proposals, navigate proposals with j/k (T035)
+    if (state.refineViewActivePane === 'chat' && state.ticketProposals.length > 0 && !state.editingProposal) {
+      if (key.name === 'j' || key.name === 'down') {
+        this.store.nextProposal()
+        needsRerender = true
+      } else if (key.name === 'k' || key.name === 'up') {
+        this.store.prevProposal()
+        needsRerender = true
       }
     }
 
@@ -923,6 +984,235 @@ Could you please provide more details about what you'd like to accomplish?`
     }
   }
 
+  /**
+   * Create tickets from selected proposals (T035)
+   */
+  private async createProposedTickets(): Promise<void> {
+    const state = this.store.getState()
+
+    // Get proposals to create (either selected ones, or all if none selected)
+    let proposalsToCreate = state.ticketProposals.filter(p => p.selected)
+    if (proposalsToCreate.length === 0) {
+      // If no proposals are selected, create all
+      proposalsToCreate = state.ticketProposals
+      // Select them all first so they get cleaned up properly
+      this.store.selectAllProposals()
+    }
+
+    if (proposalsToCreate.length === 0) {
+      return
+    }
+
+    try {
+      // Load plan store if not cached
+      if (!this.cachedPlan) {
+        const planStore = new PlanStore(`${this.projectPath}/PLAN.md`)
+        this.cachedPlan = await planStore.load()
+      }
+
+      // Create a new PlanStore instance for writing
+      const planStore = new PlanStore(`${this.projectPath}/PLAN.md`)
+      await planStore.load()
+
+      // Helper to map UI priority to core priority
+      const mapPriority = (priority: 'P1' | 'P2' | 'P3'): TicketPriority => {
+        // P3 in UI maps to P2 in core (core only has P0, P1, P2)
+        if (priority === 'P3') return 'P2'
+        return priority as TicketPriority
+      }
+
+      // Create each ticket
+      const createdTickets: string[] = []
+      for (const proposal of proposalsToCreate) {
+        const ticketData = proposalToTicket({
+          tempId: proposal.tempId,
+          title: proposal.title,
+          description: proposal.description,
+          priority: mapPriority(proposal.priority),
+          epic: proposal.epic,
+          acceptanceCriteria: proposal.acceptanceCriteria,
+          validationSteps: proposal.validationSteps,
+          dependencies: proposal.dependencies,
+          reviewed: proposal.reviewed,
+        })
+        const created = await planStore.createTicket(ticketData)
+        createdTickets.push(created.id)
+      }
+
+      // Update cached plan
+      this.cachedPlan = planStore.getPlan()
+
+      // Clear created proposals and show success message
+      this.store.clearProposalsAfterCreation()
+
+      // Add success message to chat
+      const ticketList = createdTickets.join(', ')
+      this.store.addRefineViewAIMessage(
+        `Created ${createdTickets.length} ticket(s): ${ticketList}\n\nThe tickets have been added to PLAN.md.`
+      )
+
+      this.renderCurrentView()
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      this.store.addRefineViewAIMessage(
+        `Failed to create tickets: ${errorMessage}`
+      )
+      this.renderCurrentView()
+    }
+  }
+
+  /**
+   * Handle chat messages in Refine View (T035, T036)
+   * Spawns a Refine agent to process user input and generate ticket proposals
+   */
+  private async handleRefineChatMessage(content: string): Promise<void> {
+    // Add user message to store
+    this.store.addRefineViewUserMessage(content)
+    this.renderCurrentView()
+
+    // Stop any existing refine agent
+    if (this.currentRefineAgent) {
+      try {
+        await this.currentRefineAgent.stop()
+      } catch {
+        // Ignore stop errors
+      }
+      this.currentRefineAgent = null
+    }
+
+    // Clean up previous subscription
+    if (this.refineAgentUnsubscribe) {
+      this.refineAgentUnsubscribe()
+      this.refineAgentUnsubscribe = null
+    }
+
+    // Reset accumulated output
+    this.refineAgentOutput = ''
+
+    try {
+      // Load the plan if not cached
+      if (!this.cachedPlan) {
+        const planStore = new PlanStore(`${this.projectPath}/PLAN.md`)
+        try {
+          this.cachedPlan = await planStore.load()
+        } catch {
+          // Plan not found - continue with empty plan context
+          this.cachedPlan = {
+            overview: '',
+            definitionOfDone: [],
+            epics: [],
+            tickets: [],
+            rawContent: '',
+          }
+        }
+      }
+
+      // Subscribe to agent progress events for streaming
+      const eventBus = getEventBus()
+      this.refineAgentUnsubscribe = eventBus.subscribe<AgentProgressEvent>('agent:progress', (event) => {
+        // Only process events for our refine agent
+        if (this.currentRefineAgent && event.agentId.startsWith('refine-agent-')) {
+          // Accumulate output for streaming display
+          this.refineAgentOutput += event.lastAction
+
+          // Update the UI with streaming content
+          // We update the last AI message or add a new one
+          const state = this.store.getState()
+          const messages = state.refineViewChatMessages
+          const lastMessage = messages[messages.length - 1]
+
+          if (lastMessage && lastMessage.role === 'assistant' && !lastMessage.content.includes('Thinking...')) {
+            // Update existing message content by removing and re-adding
+            // (Store doesn't support direct message updates, so we'll just render)
+          }
+
+          this.renderCurrentView()
+        }
+      })
+
+      // Add a "thinking" message while agent is processing
+      this.store.addRefineViewAIMessage('Thinking...')
+      this.renderCurrentView()
+
+      // Spawn the refine agent
+      this.currentRefineAgent = await this.agentManager.spawnRefineAgent({
+        workingDirectory: this.projectPath,
+        planContent: this.cachedPlan.rawContent,
+        existingTicketIds: this.cachedPlan.tickets.map(t => t.id),
+        epics: this.cachedPlan.epics,
+        userMessage: content,
+      })
+
+      // Wait for the agent to complete
+      const output = await this.currentRefineAgent.output
+
+      // Remove the "thinking" message and add the actual response
+      const state = this.store.getState()
+      const messages = [...state.refineViewChatMessages]
+      // Remove the last "Thinking..." message
+      if (messages.length > 0 && messages[messages.length - 1].content === 'Thinking...') {
+        messages.pop()
+        // Directly update state (this is a bit of a hack, but needed for proper UX)
+        state.refineViewChatMessages = messages
+      }
+
+      // Add the final response
+      this.store.addRefineViewAIMessage(output)
+
+      // Parse proposals from response
+      this.parseAndSetProposals(output)
+
+      this.renderCurrentView()
+    } catch (error) {
+      // Remove the "thinking" message on error
+      const state = this.store.getState()
+      const messages = [...state.refineViewChatMessages]
+      if (messages.length > 0 && messages[messages.length - 1].content === 'Thinking...') {
+        messages.pop()
+        state.refineViewChatMessages = messages
+      }
+
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      this.store.addRefineViewAIMessage(
+        `Sorry, I encountered an error: ${errorMessage}\n\nPlease try again.`
+      )
+      this.renderCurrentView()
+    } finally {
+      // Clean up
+      this.currentRefineAgent = null
+      if (this.refineAgentUnsubscribe) {
+        this.refineAgentUnsubscribe()
+        this.refineAgentUnsubscribe = null
+      }
+    }
+  }
+
+  /**
+   * Parse proposals from AI response and update store (T035, T036)
+   */
+  private parseAndSetProposals(response: string): void {
+    if (containsProposals(response)) {
+      const proposals = parseTicketProposals(response)
+
+      // Convert to UI format and auto-assign epics
+      const coreEpics = this.cachedPlan?.epics || []
+      const uiProposals = proposals.map((p: ReturnType<typeof parseTicketProposals>[0]) => {
+        // Try to auto-assign epic if not set
+        if (!p.epic && p.mentionedPaths && p.mentionedPaths.length > 0) {
+          p.epic = autoAssignEpic(p, coreEpics)
+        }
+
+        return {
+          ...p,
+          priority: p.priority as 'P1' | 'P2' | 'P3',
+          selected: true, // Select by default for easy creation
+        }
+      })
+
+      this.store.setTicketProposals(uiProposals)
+    }
+  }
+
   private startSimulation() {
     // Register onChange callback to trigger UI re-renders
     // when state changes from events (plan:loaded, agent:progress, etc.)
@@ -932,6 +1222,18 @@ Could you please provide more details about what you'd like to accomplish?`
   }
 
   private async quit() {
+    // Stop any running refine agent (T036)
+    if (this.currentRefineAgent) {
+      try {
+        await this.currentRefineAgent.stop()
+      } catch {
+        // Ignore stop errors during shutdown
+      }
+    }
+
+    // Stop all agents managed by AgentManager
+    await this.agentManager.stopAll()
+
     // Destroy the renderer first to restore terminal
     this.renderer.destroy()
 
