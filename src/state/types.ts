@@ -95,6 +95,7 @@ export interface AppState {
   refineViewActivePane: 'sidebar' | 'chat' | 'audit'
   refineViewSelectedTicket: number
   refineViewChatMessages: ChatMessage[]  // T035: Chat messages for ticket creation
+  refineViewChatInput: string  // T036: Current input text in chat pane
   refineViewPendingMessage: boolean  // T035: Waiting for AI response
   // T035: AI-Assisted Ticket Creation state
   ticketProposals: TicketProposalUI[]  // Proposed tickets from AI

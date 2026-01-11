@@ -203,6 +203,7 @@ export function createRefineView(ctx: RenderContext, props: RefineViewProps): Bo
       proposals,
       selectedProposalIndex,
       isActive: activePane === 'chat',
+      currentInput: state.refineViewChatInput,
       onSendMessage, // T036: Connect to Refine Agent
     })
     chatWrapper.add(chatPanel)
@@ -561,6 +562,7 @@ interface TicketCreationChatProps {
   proposals: TicketProposalUI[]
   selectedProposalIndex: number
   isActive: boolean
+  currentInput: string
   /** T036: Callback when user sends a message */
   onSendMessage?: (content: string) => void
 }
@@ -569,7 +571,7 @@ interface TicketCreationChatProps {
  * Create a chat panel for AI-assisted ticket creation (T035, T036)
  */
 function createTicketCreationChat(ctx: RenderContext, props: TicketCreationChatProps): BoxRenderable {
-  const { messages, proposals, selectedProposalIndex, isActive, onSendMessage } = props
+  const { messages, proposals, selectedProposalIndex, isActive, currentInput, onSendMessage } = props
 
   const container = new BoxRenderable(ctx, {
     width: '100%',
@@ -790,12 +792,13 @@ function createTicketCreationChat(ctx: RenderContext, props: TicketCreationChatP
       cursorColor: colors.cyan,
       textColor: colors.text,
       backgroundColor: colors.activeBg,
+      value: currentInput,
     })
 
     // Handle message submission
     inputField.on(InputRenderableEvents.ENTER, (event: unknown) => {
       const content = inputField.value?.trim()
-      if (content) {
+      if (content && onSendMessage) {
         onSendMessage(content)
         inputField.value = ''
       }

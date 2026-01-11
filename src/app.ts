@@ -828,6 +828,42 @@ Could you please provide more details about what you'd like to accomplish?`
       }
     }
 
+    // T036: Handle text input in chat pane when no proposals yet
+    if (state.refineViewActivePane === 'chat' && state.ticketProposals.length === 0 && !state.editingProposal) {
+      // Handle Enter to send message
+      if (key.name === 'return') {
+        const input = state.refineViewChatInput.trim()
+        if (input) {
+          this.handleRefineChatMessage(input)
+          this.store.setRefineViewChatInput('')
+        }
+        return
+      }
+
+      // Handle backspace to delete character
+      if (key.name === 'backspace') {
+        const input = state.refineViewChatInput
+        if (input.length > 0) {
+          this.store.setRefineViewChatInput(input.slice(0, -1))
+        }
+        needsRerender = true
+        return
+      }
+
+      // Handle printable characters
+      if (key.name && key.name.length === 1 && !key.ctrl && !key.shift) {
+        // Regular printable character
+        this.store.setRefineViewChatInput(state.refineViewChatInput + key.name)
+        needsRerender = true
+        return
+      } else if (key.shift && key.name && key.name.length === 1) {
+        // Shift+char - handle uppercase
+        this.store.setRefineViewChatInput(state.refineViewChatInput + key.name.toUpperCase())
+        needsRerender = true
+        return
+      }
+    }
+
     // Tab to switch between sidebar, chat, and audit (if audit results present)
     if (key.name === 'tab' && !state.editingProposal) {
       const hasAudit = state.auditFindings.length > 0 || state.auditInProgress

@@ -229,6 +229,7 @@ export class Store {
       refineViewActivePane: 'sidebar',
       refineViewSelectedTicket: 0,
       refineViewChatMessages: [],
+      refineViewChatInput: '',
       refineViewPendingMessage: false,
       // T035: AI-Assisted Ticket Creation state
       ticketProposals: [],
@@ -1328,11 +1329,27 @@ export class Store {
    */
   clearRefineViewChat(): void {
     this.state.refineViewChatMessages = [];
+    this.state.refineViewChatInput = '';
     this.state.refineViewPendingMessage = false;
     this.state.ticketProposals = [];
     this.state.selectedProposalIndex = 0;
     this.state.editingProposal = undefined;
     this.notifyChange();
+  }
+
+  /**
+   * Update refine view chat input text
+   */
+  setRefineViewChatInput(text: string): void {
+    this.state.refineViewChatInput = text;
+    this.notifyChange();
+  }
+
+  /**
+   * Get refine view chat input text
+   */
+  getRefineViewChatInput(): string {
+    return this.state.refineViewChatInput;
   }
 
   /**
