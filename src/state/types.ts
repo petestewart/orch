@@ -118,6 +118,17 @@ export interface AppState {
     onConfirm: () => void
     onCancel: () => void
   }
+  // T039: Manual Ticket Creation Dialog
+  manualTicketCreateDialog?: {
+    isOpen: boolean
+    title: string
+    description: string
+    priority: Priority
+    epic: string
+    acceptanceCriteria: string[]
+    dependencies: string[]
+    currentField: 'title' | 'description' | 'priority' | 'epic' | 'acceptanceCriteria' | 'dependencies'
+  }
   // Plan Audit state (T038)
   auditInProgress: boolean
   auditPhase?: 'loading' | 'prd-comparison' | 'codebase-analysis' | 'dependency-check' | 'complete'

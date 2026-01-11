@@ -1,4 +1,4 @@
-import { fg } from '@opentui/core'
+import { fg, t } from '@opentui/core'
 import { colors } from './colors.js'
 
 const CURSOR_TOKEN = '<<CURSOR>>'
@@ -34,13 +34,45 @@ function layoutChatInput(text: string, cursorIndex: number, maxLines: number): {
   return { lines: visibleLines, lineCount: Math.max(1, visibleLines.length) }
 }
 
-function formatLine(prompt: string, line: string, textColor: string, showCursor: boolean): string {
+function formatLine(prompt: string, line: string, textColor: string, showCursor: boolean): object {
   const safeLine = showCursor ? line : line.replace(CURSOR_TOKEN, '')
   const parts = safeLine.split(CURSOR_TOKEN)
   if (parts.length === 1) {
-    return `${fg(colors.cyan)(prompt)}${fg(textColor)(parts[0])}`
+    return t`${fg(colors.cyan)(prompt)}${fg(textColor)(parts[0])}`
   }
-  return `${fg(colors.cyan)(prompt)}${fg(textColor)(parts[0])}${fg(colors.cyan)('█')}${fg(textColor)(parts[1])}`
+  return t`${fg(colors.cyan)(prompt)}${fg(textColor)(parts[0])}${fg(colors.cyan)('█')}${fg(textColor)(parts[1])}`
+}
+
+/**
+ * Render chat input in fallback single-line mode (no multiline support).
+ * T041: Fallback mode for when multiline rendering fails.
+ */
+function renderChatInputFallback(options: {
+  text: string
+  placeholder: string
+  isActive: boolean
+  inactiveColor: string
+  prompt?: string
+}): { lines: object[]; lineCount: number } {
+  const {
+    text,
+    placeholder,
+    isActive,
+    inactiveColor,
+    prompt = '> ',
+  } = options
+
+  const hasValue = text.length > 0
+  const textColor = isActive ? colors.text : inactiveColor
+
+  // In fallback mode, strip newlines from the display
+  const displayText = hasValue ? text.replace(/\n/g, '↵') : placeholder
+  const line = isActive && hasValue ? `${displayText}▌` : displayText
+
+  return {
+    lines: [t`${fg(colors.cyan)(prompt)}${fg(textColor)(line)}`],
+    lineCount: 1,
+  }
 }
 
 export function renderChatInputContent(options: {
@@ -51,7 +83,8 @@ export function renderChatInputContent(options: {
   isActive: boolean
   inactiveColor: string
   prompt?: string
-}): { lines: string[]; lineCount: number } {
+  multilineMode?: boolean // T041: Enable multiline mode (default: true)
+}): { lines: object[]; lineCount: number } {
   const {
     text,
     cursorIndex,
@@ -60,10 +93,22 @@ export function renderChatInputContent(options: {
     isActive,
     inactiveColor,
     prompt = '> ',
+    multilineMode = true,
   } = options
 
   const hasValue = text.length > 0
   const textColor = isActive ? colors.text : inactiveColor
+
+  // T041: Use fallback single-line mode if disabled
+  if (!multilineMode) {
+    return renderChatInputFallback({
+      text,
+      placeholder,
+      isActive,
+      inactiveColor,
+      prompt,
+    })
+  }
 
   if (!hasValue) {
     const line = isActive ? `${CURSOR_TOKEN}${placeholder}` : placeholder

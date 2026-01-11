@@ -65,9 +65,14 @@ export class App {
   private refineAgentOutput: string = '' // Accumulated output for streaming
   private refineAgentUnsubscribe: (() => void) | null = null
 
+  // T041: Chat input configuration
+  private chatInputMultilineMode: boolean = true
+
   constructor() {
     this.store = new Store()
     this.agentManager = new AgentManager()
+    // T041: Initialize chat input multiline mode from config or env var
+    this.chatInputMultilineMode = process.env.ORCH_CHAT_MULTILINE !== 'false'
   }
 
   async start() {
@@ -255,6 +260,7 @@ export class App {
       placeholder: options.placeholder,
       isActive: options.isActive,
       inactiveColor: options.inactiveColor,
+      multilineMode: this.chatInputMultilineMode, // T041: Use configured multiline mode
     })
   }
 

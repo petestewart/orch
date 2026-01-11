@@ -254,6 +254,8 @@ export class Store {
       showHelpOverlay: false,
       // Cost tracking state (T025)
       totalCost: 0,
+      // T039: Manual Ticket Creation Dialog
+      manualTicketCreateDialog: undefined,
     };
 
     // Subscribe to all relevant events
@@ -1189,6 +1191,38 @@ export class Store {
 
   closeConfirmationDialog(): void {
     this.state.confirmationDialog = undefined;
+    this.notifyChange();
+  }
+
+  // ============================================================================
+  // Manual Ticket Creation (T039)
+  // ============================================================================
+
+  openManualTicketCreateDialog(): void {
+    this.state.manualTicketCreateDialog = {
+      isOpen: true,
+      title: '',
+      description: '',
+      priority: 'P2',
+      epic: '',
+      acceptanceCriteria: [],
+      dependencies: [],
+      currentField: 'title',
+    };
+    this.notifyChange();
+  }
+
+  closeManualTicketCreateDialog(): void {
+    this.state.manualTicketCreateDialog = undefined;
+    this.notifyChange();
+  }
+
+  updateManualTicketField(field: string, value: string | string[]): void {
+    if (!this.state.manualTicketCreateDialog) return;
+    this.state.manualTicketCreateDialog = {
+      ...this.state.manualTicketCreateDialog,
+      [field]: value,
+    };
     this.notifyChange();
   }
 

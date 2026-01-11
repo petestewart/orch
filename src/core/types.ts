@@ -176,6 +176,9 @@ export interface OrchConfig {
     defaultView: string;
     refreshInterval: number;
     showCostInStatusBar: boolean;
+    chatInput?: {
+      multilineMode: boolean; // T041: Enable multiline rendering (default: true); set to false for single-line fallback
+    };
   };
 }
 
