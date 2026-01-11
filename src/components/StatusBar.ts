@@ -18,9 +18,11 @@ const VIEW_SHORTCUTS: Record<AppState['currentView'], ShortcutDef[]> = {
     { key: 'j/k', label: 'nav' },
     { key: 'h/l', label: 'columns' },
     { key: 'Enter', label: 'open' },
-    { key: 'n', label: 'new' },
-    { key: 'm', label: 'move' },
-    { key: 'a', label: 'assign' },
+    { key: 'e', label: 'epic filter' },
+    { key: 'a', label: 'approve' },
+    { key: 'r', label: 'reject' },
+    { key: 't', label: 'takeover' },
+    { key: 'p', label: 'pause' },
   ],
   plan: [
     { key: 'Tab', label: 'switch pane' },
@@ -48,6 +50,7 @@ const VIEW_SHORTCUTS: Record<AppState['currentView'], ShortcutDef[]> = {
 
 export interface StatusBarProps {
   currentView: AppState['currentView']
+  pendingApprovalsCount?: number
 }
 
 export function createStatusBar(ctx: RenderContext, props: StatusBarProps): BoxRenderable {
@@ -60,6 +63,14 @@ export function createStatusBar(ctx: RenderContext, props: StatusBarProps): BoxR
     paddingRight: 1,
     gap: 2,
   })
+
+  // Show pending approvals count if > 0 (T029)
+  if (props.pendingApprovalsCount && props.pendingApprovalsCount > 0) {
+    const pendingText = new TextRenderable(ctx, {
+      content: t`${bg(colors.yellow)(fg(colors.bgDark)(` ${props.pendingApprovalsCount} pending `))}`,
+    })
+    statusBar.add(pendingText)
+  }
 
   // Build shortcut text - create individual text elements for each shortcut
   const viewShortcuts = VIEW_SHORTCUTS[props.currentView] || []

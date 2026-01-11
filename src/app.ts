@@ -20,9 +20,11 @@ import { createAgentsView, getAgentCount } from './views/AgentsView.js'
 import { createLogsView, getLogCount } from './views/LogsView.js'
 import { createPlanView } from './views/PlanView.js'
 import { createRefineView } from './views/RefineView.js'
-import type { AppState } from './state/types.js'
+import type { AppState, AuditFindingUI } from './state/types.js'
 import { triggerShutdown } from './core/shutdown.js'
 import { getEventBus } from './core/events.js'
+import { runPlanAudit, type AuditPhase } from './core/plan-audit.js'
+import { PlanStore, type ParsedPlan } from './core/plan-store.js'
 
 export class App {
   private renderer!: CliRenderer
@@ -38,6 +40,10 @@ export class App {
 
   // Current view reference
   private currentViewComponent: BoxRenderable | null = null
+
+  // Cached plan for audit (T038)
+  private cachedPlan: ParsedPlan | null = null
+  private projectPath: string = process.cwd()
 
   constructor() {
     this.store = new Store()
@@ -95,6 +101,7 @@ export class App {
     // Status bar
     this.statusBar = createStatusBar(this.ctx, {
       currentView: state.currentView,
+      pendingApprovalsCount: this.store.getPendingApprovalsCount(),
     })
 
     // Add to main container
@@ -163,7 +170,10 @@ export class App {
 
     // Update status bar
     this.mainContainer.remove(this.statusBar.id)
-    this.statusBar = createStatusBar(this.ctx, { currentView: view })
+    this.statusBar = createStatusBar(this.ctx, {
+      currentView: view,
+      pendingApprovalsCount: this.store.getPendingApprovalsCount(),
+    })
     this.mainContainer.add(this.statusBar)
 
     // Render new view
@@ -403,6 +413,82 @@ export class App {
       return
     }
 
+    // Human intervention keys (T029) - context-sensitive based on selection
+    // 'a' key approves and advances ticket
+    if (key.name === 'a') {
+      if (selectedColumnIndex >= 0 && selectedColumnIndex < COLUMNS.length) {
+        const tickets = this.store.getTicketsByStatus(COLUMNS[selectedColumnIndex].status)
+        if (selectedTicketIndex < tickets.length) {
+          const selectedTicket = tickets[selectedTicketIndex]
+          // Only approve tickets in review or qa status
+          if (selectedTicket.status === 'review' || selectedTicket.status === 'qa') {
+            this.store.requestApproveTicket(selectedTicket.id)
+            needsRerender = true
+          }
+        }
+      }
+    }
+
+    // 'r' key rejects ticket (for review/qa status)
+    if (key.name === 'r') {
+      if (selectedColumnIndex >= 0 && selectedColumnIndex < COLUMNS.length) {
+        const tickets = this.store.getTicketsByStatus(COLUMNS[selectedColumnIndex].status)
+        if (selectedTicketIndex < tickets.length) {
+          const selectedTicket = tickets[selectedTicketIndex]
+          // Reject for review or qa status
+          if (selectedTicket.status === 'review' || selectedTicket.status === 'qa') {
+            // Show confirmation dialog for destructive action
+            this.store.showConfirmationDialog({
+              title: 'Reject Ticket',
+              message: `Are you sure you want to reject ticket #${selectedTicket.number}? It will return to the backlog.`,
+              confirmLabel: 'Reject',
+              cancelLabel: 'Cancel',
+              onConfirm: () => {
+                this.store.requestRejectTicket(selectedTicket.id, 'Manual rejection from UI')
+                this.store.closeConfirmationDialog()
+                this.renderCurrentView()
+              },
+              onCancel: () => {
+                this.store.closeConfirmationDialog()
+                this.renderCurrentView()
+              },
+            })
+            needsRerender = true
+          }
+        }
+      }
+    }
+
+    // 't' key takes over (switches to manual mode)
+    if (key.name === 't') {
+      if (selectedColumnIndex >= 0 && selectedColumnIndex < COLUMNS.length) {
+        const tickets = this.store.getTicketsByStatus(COLUMNS[selectedColumnIndex].status)
+        if (selectedTicketIndex < tickets.length) {
+          const selectedTicket = tickets[selectedTicketIndex]
+          // Can take over tickets in review, qa, or in_progress
+          if (selectedTicket.status === 'review' || selectedTicket.status === 'qa' || selectedTicket.status === 'in_progress') {
+            this.store.requestTakeoverTicket(selectedTicket.id)
+            needsRerender = true
+          }
+        }
+      }
+    }
+
+    // 'p' key pauses/resumes automation for this ticket
+    if (key.name === 'p') {
+      if (selectedColumnIndex >= 0 && selectedColumnIndex < COLUMNS.length) {
+        const tickets = this.store.getTicketsByStatus(COLUMNS[selectedColumnIndex].status)
+        if (selectedTicketIndex < tickets.length) {
+          const selectedTicket = tickets[selectedTicketIndex]
+          // Can pause any ticket that isn't done
+          if (selectedTicket.status !== 'done') {
+            this.store.requestPauseTicket(selectedTicket.id)
+            needsRerender = true
+          }
+        }
+      }
+    }
+
     if (needsRerender) {
       this.renderCurrentView()
     }
@@ -545,9 +631,36 @@ export class App {
     const ticketCount = state.tickets.length
     let needsRerender = false
 
-    // Tab to switch between sidebar and chat
+    // 'A' key (uppercase/Shift+A) triggers plan audit (T038)
+    if (key.name === 'a' && key.shift) {
+      this.triggerPlanAudit()
+      return
+    }
+
+    // Escape closes audit panel
+    if (key.name === 'escape' && state.refineViewActivePane === 'audit') {
+      this.store.clearAudit()
+      needsRerender = true
+    }
+
+    // Tab to switch between sidebar, chat, and audit (if audit results present)
     if (key.name === 'tab') {
-      const newPane = state.refineViewActivePane === 'sidebar' ? 'chat' : 'sidebar'
+      const hasAudit = state.auditFindings.length > 0 || state.auditInProgress
+      let newPane: 'sidebar' | 'chat' | 'audit'
+
+      if (hasAudit) {
+        // Cycle: sidebar -> chat -> audit -> sidebar
+        if (state.refineViewActivePane === 'sidebar') {
+          newPane = 'chat'
+        } else if (state.refineViewActivePane === 'chat') {
+          newPane = 'audit'
+        } else {
+          newPane = 'sidebar'
+        }
+      } else {
+        // No audit results, just toggle sidebar/chat
+        newPane = state.refineViewActivePane === 'sidebar' ? 'chat' : 'sidebar'
+      }
       this.store.setRefineViewActivePane(newPane)
       needsRerender = true
     }
@@ -567,7 +680,81 @@ export class App {
       }
     }
 
+    // When in audit pane, navigate findings with j/k
+    if (state.refineViewActivePane === 'audit') {
+      if (key.name === 'j' || key.name === 'down') {
+        this.store.nextAuditFinding()
+        needsRerender = true
+      } else if (key.name === 'k' || key.name === 'up') {
+        this.store.prevAuditFinding()
+        needsRerender = true
+      }
+    }
+
     if (needsRerender) {
+      this.renderCurrentView()
+    }
+  }
+
+  /**
+   * Trigger plan audit (T038)
+   */
+  private async triggerPlanAudit(): Promise<void> {
+    const state = this.store.getState()
+
+    // Don't run if already in progress
+    if (state.auditInProgress) {
+      return
+    }
+
+    // Start audit
+    this.store.startAudit()
+    this.renderCurrentView()
+
+    try {
+      // Load the plan if not cached
+      if (!this.cachedPlan) {
+        const planStore = new PlanStore(`${this.projectPath}/PLAN.md`)
+        this.cachedPlan = await planStore.load()
+      }
+
+      // Run the audit with progress callback
+      const result = await runPlanAudit({
+        projectPath: this.projectPath,
+        plan: this.cachedPlan!,
+        onProgress: (phase: AuditPhase, progress: number) => {
+          this.store.setAuditProgress(phase, progress)
+          this.renderCurrentView()
+        },
+      })
+
+      // Convert findings to UI format
+      const uiFindings: AuditFindingUI[] = result.findings.map((f, index) => ({
+        id: `audit-${index}`,
+        severity: f.severity,
+        category: f.category,
+        message: f.message,
+        ticketId: f.ticketId,
+        suggestedAction: f.suggestedAction,
+        suggestedTicketTitle: f.suggestedTicket?.title,
+      }))
+
+      // Complete the audit
+      this.store.completeAudit(uiFindings, result.summary)
+      this.renderCurrentView()
+    } catch (error) {
+      // Handle error
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      this.store.completeAudit(
+        [{
+          id: 'audit-error',
+          severity: 'error',
+          category: 'audit',
+          message: `Audit failed: ${errorMessage}`,
+          suggestedAction: 'review',
+        }],
+        { errors: 1, warnings: 0, infos: 0 }
+      )
       this.renderCurrentView()
     }
   }

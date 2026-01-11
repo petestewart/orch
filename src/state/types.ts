@@ -90,7 +90,7 @@ export interface AppState {
   planViewActivePane: 'chat' | 'docs'
   planViewActiveDoc: 'prd' | 'plan' | 'tickets'
   // Refine view state
-  refineViewActivePane: 'sidebar' | 'chat'
+  refineViewActivePane: 'sidebar' | 'chat' | 'audit'
   refineViewSelectedTicket: number
   // Kanban epic grouping state (T034)
   kanbanEpicFilter?: string  // undefined = show all, string = filter by specific epic
@@ -104,4 +104,28 @@ export interface AppState {
     onConfirm: () => void
     onCancel: () => void
   }
+  // Plan Audit state (T038)
+  auditInProgress: boolean
+  auditPhase?: 'loading' | 'prd-comparison' | 'codebase-analysis' | 'dependency-check' | 'complete'
+  auditProgress: number  // 0-100
+  auditFindings: AuditFindingUI[]
+  auditSummary?: {
+    errors: number
+    warnings: number
+    infos: number
+  }
+  selectedAuditFindingIndex: number
+}
+
+export type AuditSeverity = 'error' | 'warning' | 'info'
+export type AuditAction = 'create' | 'update' | 'deprecate' | 'review'
+
+export interface AuditFindingUI {
+  id: string
+  severity: AuditSeverity
+  category: string
+  message: string
+  ticketId?: string
+  suggestedAction: AuditAction
+  suggestedTicketTitle?: string
 }

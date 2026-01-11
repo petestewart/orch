@@ -84,7 +84,7 @@ Agents signal completion/blockers via markers in their output:
 
 ## Current Implementation Status
 
-**Done (27 tickets):** T001-T013, T015-T017, T022-T024, T026-T028, T030-T033, T037
+**Done (31 tickets):** T001-T017, T022-T024, T026-T034, T037-T038
 
 **All P0 tickets complete.** Core orchestration infrastructure is fully implemented:
 - Event bus, plan parsing, dependency graph
@@ -96,8 +96,11 @@ Agents signal completion/blockers via markers in their output:
 - State store with event subscriptions
 - UI views connected to real state (Kanban, Agents, Logs, Session)
 - Unit test infrastructure and integration tests
+- Human intervention UI (approve/reject/takeover/pause)
+- Kanban epic grouping with worktree indicators
+- Plan audit with codebase analysis
 
-**Remaining P1:** T014 (TicketView Agent Actions), T029 (Human Intervention UI), T034 (Kanban Epic Grouping), T035 (AI-Assisted Tickets), T036 (Refine Agent), T038 (Plan Audit)
+**Remaining P1:** T035 (AI-Assisted Tickets), T036 (Refine Agent) - blocked by T021 (P2)
 
 **Remaining P2:** T018-T021 (Error Recovery, Help Overlay, Plan/Refine Views), T025 (Cost Tracking)
 

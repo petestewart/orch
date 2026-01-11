@@ -7,7 +7,7 @@
  * Implements: T010
  */
 
-import type { AppState, Epic, Ticket, Agent, LogEntry, TicketStatus } from './types.js';
+import type { AppState, Epic, Ticket, Agent, LogEntry, TicketStatus, AuditFindingUI, TicketAutomationMode } from './types.js';
 import type {
   Ticket as CoreTicket,
   Agent as CoreAgent,
@@ -220,6 +220,13 @@ export class Store {
       // Kanban epic grouping state (T034)
       kanbanEpicFilter: undefined,
       kanbanCollapsedEpics: new Set<string>(),
+      // Plan Audit state (T038)
+      auditInProgress: false,
+      auditPhase: undefined,
+      auditProgress: 0,
+      auditFindings: [],
+      auditSummary: undefined,
+      selectedAuditFindingIndex: 0,
     };
 
     // Subscribe to all relevant events
@@ -767,7 +774,7 @@ export class Store {
     this.notifyChange();
   }
 
-  setRefineViewActivePane(pane: 'sidebar' | 'chat') {
+  setRefineViewActivePane(pane: 'sidebar' | 'chat' | 'audit') {
     this.state.refineViewActivePane = pane;
     this.notifyChange();
   }
@@ -900,4 +907,234 @@ export class Store {
 
   // Removed simulation methods (updateAgentProgress, addRandomLogEntry)
   // Real data now comes from events
+
+  // ============================================================================
+  // Human Intervention UI (T029)
+  // ============================================================================
+
+  getPendingApprovalsCount(): number {
+    return this.state.tickets.filter(t => t.awaitingApproval).length;
+  }
+
+  getPendingApprovals(): Ticket[] {
+    return this.state.tickets.filter(t => t.awaitingApproval);
+  }
+
+  setTicketAwaitingApproval(ticketId: string, awaiting: boolean): void {
+    const ticket = this.state.tickets.find(t => t.id === ticketId);
+    if (ticket) {
+      ticket.awaitingApproval = awaiting;
+      this.notifyChange();
+    }
+  }
+
+  setTicketAutomationMode(ticketId: string, mode: TicketAutomationMode | undefined): void {
+    const ticket = this.state.tickets.find(t => t.id === ticketId);
+    if (ticket) {
+      ticket.automationMode = mode;
+      this.notifyChange();
+    }
+  }
+
+  setTicketReviewOutput(ticketId: string, output: string | undefined): void {
+    const ticket = this.state.tickets.find(t => t.id === ticketId);
+    if (ticket) {
+      ticket.reviewOutput = output;
+      this.notifyChange();
+    }
+  }
+
+  setTicketQAOutput(ticketId: string, output: string | undefined): void {
+    const ticket = this.state.tickets.find(t => t.id === ticketId);
+    if (ticket) {
+      ticket.qaOutput = output;
+      this.notifyChange();
+    }
+  }
+
+  setTicketRejectionFeedback(ticketId: string, feedback: string | undefined): void {
+    const ticket = this.state.tickets.find(t => t.id === ticketId);
+    if (ticket) {
+      ticket.rejectionFeedback = feedback;
+      this.notifyChange();
+    }
+  }
+
+  requestApproveTicket(ticketId: string): void {
+    const ticket = this.state.tickets.find(t => t.id === ticketId);
+    if (!ticket) return;
+    if (ticket.status !== 'review' && ticket.status !== 'qa') {
+      this.addSystemLog('WARN', `Cannot approve ticket ${ticketId.toUpperCase()}: not in Review or QA status`);
+      return;
+    }
+    this.eventBus.publish({
+      type: 'log:entry',
+      timestamp: new Date(),
+      level: 'event',
+      message: `Approval requested for ticket ${ticketId.toUpperCase()}`,
+      ticketId: ticketId.toUpperCase(),
+    });
+    ticket.awaitingApproval = false;
+    this.notifyChange();
+  }
+
+  requestRejectTicket(ticketId: string, feedback?: string): void {
+    const ticket = this.state.tickets.find(t => t.id === ticketId);
+    if (!ticket) return;
+    if (ticket.status !== 'review' && ticket.status !== 'qa') {
+      this.addSystemLog('WARN', `Cannot reject ticket ${ticketId.toUpperCase()}: not in Review or QA status`);
+      return;
+    }
+    this.eventBus.publish({
+      type: 'log:entry',
+      timestamp: new Date(),
+      level: 'event',
+      message: `Rejection requested for ticket ${ticketId.toUpperCase()}${feedback ? `: ${feedback}` : ''}`,
+      ticketId: ticketId.toUpperCase(),
+    });
+    if (feedback) {
+      ticket.rejectionFeedback = feedback;
+    }
+    ticket.awaitingApproval = false;
+    this.notifyChange();
+  }
+
+  requestTakeoverTicket(ticketId: string): void {
+    const ticket = this.state.tickets.find(t => t.id === ticketId);
+    if (!ticket) return;
+    if (ticket.status !== 'review' && ticket.status !== 'qa' && ticket.status !== 'in_progress') {
+      this.addSystemLog('WARN', `Cannot take over ticket ${ticketId.toUpperCase()}: not in Review, QA, or In Progress`);
+      return;
+    }
+    ticket.automationMode = 'manual';
+    this.eventBus.publish({
+      type: 'log:entry',
+      timestamp: new Date(),
+      level: 'event',
+      message: `Taking over ticket ${ticketId.toUpperCase()} (switching to manual mode)`,
+      ticketId: ticketId.toUpperCase(),
+    });
+    this.notifyChange();
+  }
+
+  requestPauseTicket(ticketId: string): void {
+    const ticket = this.state.tickets.find(t => t.id === ticketId);
+    if (!ticket) return;
+    if (ticket.automationMode === 'paused') {
+      ticket.automationMode = undefined;
+      this.eventBus.publish({
+        type: 'log:entry',
+        timestamp: new Date(),
+        level: 'event',
+        message: `Resuming automation for ticket ${ticketId.toUpperCase()}`,
+        ticketId: ticketId.toUpperCase(),
+      });
+    } else {
+      ticket.automationMode = 'paused';
+      this.eventBus.publish({
+        type: 'log:entry',
+        timestamp: new Date(),
+        level: 'event',
+        message: `Pausing automation for ticket ${ticketId.toUpperCase()}`,
+        ticketId: ticketId.toUpperCase(),
+      });
+    }
+    this.notifyChange();
+  }
+
+  showConfirmationDialog(dialog: AppState['confirmationDialog']): void {
+    this.state.confirmationDialog = dialog;
+    this.notifyChange();
+  }
+
+  closeConfirmationDialog(): void {
+    this.state.confirmationDialog = undefined;
+    this.notifyChange();
+  }
+
+  // ============================================================================
+  // Plan Audit (T038)
+  // ============================================================================
+
+  /**
+   * Start an audit (sets in progress flag)
+   */
+  startAudit(): void {
+    this.state.auditInProgress = true;
+    this.state.auditPhase = 'loading';
+    this.state.auditProgress = 0;
+    this.state.auditFindings = [];
+    this.state.auditSummary = undefined;
+    this.state.selectedAuditFindingIndex = 0;
+    this.state.refineViewActivePane = 'audit';
+    this.addSystemLog('INFO', 'Plan audit started');
+    this.notifyChange();
+  }
+
+  /**
+   * Update audit progress
+   */
+  setAuditProgress(phase: AppState['auditPhase'], progress: number): void {
+    this.state.auditPhase = phase;
+    this.state.auditProgress = progress;
+    this.notifyChange();
+  }
+
+  /**
+   * Complete the audit with findings
+   */
+  completeAudit(findings: AuditFindingUI[], summary: { errors: number; warnings: number; infos: number }): void {
+    this.state.auditInProgress = false;
+    this.state.auditPhase = 'complete';
+    this.state.auditProgress = 100;
+    this.state.auditFindings = findings;
+    this.state.auditSummary = summary;
+    this.state.selectedAuditFindingIndex = 0;
+    this.addSystemLog('INFO', `Plan audit complete: ${summary.errors} errors, ${summary.warnings} warnings, ${summary.infos} info`);
+    this.notifyChange();
+  }
+
+  /**
+   * Clear audit results and return to chat pane
+   */
+  clearAudit(): void {
+    this.state.auditInProgress = false;
+    this.state.auditPhase = undefined;
+    this.state.auditProgress = 0;
+    this.state.auditFindings = [];
+    this.state.auditSummary = undefined;
+    this.state.selectedAuditFindingIndex = 0;
+    this.state.refineViewActivePane = 'chat';
+    this.notifyChange();
+  }
+
+  /**
+   * Set selected audit finding index
+   */
+  setSelectedAuditFindingIndex(index: number): void {
+    if (index >= 0 && index < this.state.auditFindings.length) {
+      this.state.selectedAuditFindingIndex = index;
+      this.notifyChange();
+    }
+  }
+
+  /**
+   * Navigate to next audit finding
+   */
+  nextAuditFinding(): void {
+    if (this.state.selectedAuditFindingIndex < this.state.auditFindings.length - 1) {
+      this.state.selectedAuditFindingIndex++;
+      this.notifyChange();
+    }
+  }
+
+  /**
+   * Navigate to previous audit finding
+   */
+  prevAuditFinding(): void {
+    if (this.state.selectedAuditFindingIndex > 0) {
+      this.state.selectedAuditFindingIndex--;
+      this.notifyChange();
+    }
+  }
 }
