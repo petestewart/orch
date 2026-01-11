@@ -1,6 +1,7 @@
 import {
   BoxRenderable,
   type RenderContext,
+  type TextRenderable,
 } from '@opentui/core'
 import { colors } from '../utils/colors.js'
 import { createChatPanel } from '../components/ChatPanel.js'
@@ -16,10 +17,11 @@ export interface PlanViewProps {
   onDocChange?: (doc: 'prd' | 'plan' | 'tickets') => void
   onSendMessage?: (content: string) => void
   planContent?: string // Custom PLAN.md content to display
+  onChatInputReady?: (lines: TextRenderable[]) => void
 }
 
 export function createPlanView(ctx: RenderContext, props: PlanViewProps): BoxRenderable {
-  const { store, activePane, activeDoc, onPaneChange, onDocChange, onSendMessage, planContent } = props
+  const { store, activePane, activeDoc, onPaneChange, onDocChange, onSendMessage, planContent, onChatInputReady } = props
 
   // Main container - horizontal layout for two columns
   // ┌─ Chat (60%) ─────────────────────┬─ Documents (40%) ────────────┐
@@ -63,6 +65,11 @@ export function createPlanView(ctx: RenderContext, props: PlanViewProps): BoxRen
     messages: displayMessages,
     placeholder: 'Type your planning question...',
     onSendMessage: onSendMessage,
+    isInputActive: store.getState().planViewChatInputMode && activePane === 'chat',
+    currentInput: store.getState().planViewChatInput,
+    cursorIndex: store.getState().planViewChatCursor,
+    inactiveInputColor: colors.textDim,
+    onInputReady: onChatInputReady,
   })
   chatPaneContainer.add(chatPanel)
 

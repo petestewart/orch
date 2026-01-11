@@ -5,6 +5,7 @@ import type { AppState } from '../state/types.js'
 interface ShortcutDef {
   key: string
   label: string
+  requiresCtrlInInputMode?: boolean
 }
 
 const GLOBAL_SHORTCUTS: ShortcutDef[] = [
@@ -25,14 +26,20 @@ const VIEW_SHORTCUTS: Record<AppState['currentView'], ShortcutDef[]> = {
     { key: 'p', label: 'pause' },
   ],
   plan: [
-    { key: 'Tab', label: 'switch pane' },
-    { key: 'Enter', label: 'send' },
+    { key: 'Tab', label: 'switch pane', requiresCtrlInInputMode: false },
+    { key: 'i', label: 'input', requiresCtrlInInputMode: false },
+    { key: 'Esc', label: 'command', requiresCtrlInInputMode: false },
+    { key: 'Enter', label: 'send', requiresCtrlInInputMode: false },
+    { key: 'Shift+Enter', label: 'newline', requiresCtrlInInputMode: false },
   ],
   refine: [
     { key: 'j/k', label: 'tickets' },
-    { key: 'Tab', label: 'switch pane' },
+    { key: 'Tab', label: 'switch pane', requiresCtrlInInputMode: false },
+    { key: 'i', label: 'input', requiresCtrlInInputMode: false },
+    { key: 'Esc', label: 'command', requiresCtrlInInputMode: false },
     { key: 'y', label: 'accept' },
     { key: 'n', label: 'reject' },
+    { key: 'Shift+Enter', label: 'newline', requiresCtrlInInputMode: false },
   ],
   agents: [
     { key: 'j/k', label: 'nav' },
@@ -52,6 +59,16 @@ export interface StatusBarProps {
   currentView: AppState['currentView']
   pendingApprovalsCount?: number
   totalCost?: number // T025: Cost Tracking
+  chatPaneActive?: boolean
+  chatInputMode?: boolean
+  ctrlPrefixShortcuts?: boolean
+}
+
+function formatShortcutKey(shortcut: ShortcutDef, ctrlPrefixShortcuts?: boolean): string {
+  if (ctrlPrefixShortcuts && shortcut.requiresCtrlInInputMode !== false) {
+    return `^${shortcut.key}`
+  }
+  return shortcut.key
 }
 
 export function createStatusBar(ctx: RenderContext, props: StatusBarProps): BoxRenderable {
@@ -73,6 +90,15 @@ export function createStatusBar(ctx: RenderContext, props: StatusBarProps): BoxR
     statusBar.add(costText)
   }
 
+  if (props.chatPaneActive) {
+    const label = props.chatInputMode ? 'INPUT' : 'CMD'
+    const indicatorColor = props.chatInputMode ? colors.green : colors.yellow
+    const chatMode = new TextRenderable(ctx, {
+      content: t`${bg(indicatorColor)(fg(colors.bgDark)(` ${label} `))}`,
+    })
+    statusBar.add(chatMode)
+  }
+
   // Show pending approvals count if > 0 (T029)
   if (props.pendingApprovalsCount && props.pendingApprovalsCount > 0) {
     const pendingText = new TextRenderable(ctx, {
@@ -82,12 +108,35 @@ export function createStatusBar(ctx: RenderContext, props: StatusBarProps): BoxR
   }
 
   // Build shortcut text - create individual text elements for each shortcut
-  const viewShortcuts = VIEW_SHORTCUTS[props.currentView] || []
+  const viewShortcuts = (VIEW_SHORTCUTS[props.currentView] || []).filter((shortcut) => {
+    if (!props.chatPaneActive) {
+      return true
+    }
+
+    if (props.currentView !== 'plan' && props.currentView !== 'refine') {
+      return true
+    }
+
+    if (shortcut.key !== 'i' && shortcut.key !== 'Esc') {
+      return true
+    }
+
+    if (props.chatInputMode && shortcut.key === 'i') {
+      return false
+    }
+
+    if (!props.chatInputMode && shortcut.key === 'Esc') {
+      return false
+    }
+
+    return true
+  })
   const allShortcuts = [...viewShortcuts, ...GLOBAL_SHORTCUTS]
 
   for (const shortcut of allShortcuts) {
+    const shortcutKey = formatShortcutKey(shortcut, props.ctrlPrefixShortcuts)
     const shortcutText = new TextRenderable(ctx, {
-      content: t`${bg(colors.borderDim)(fg(colors.textBold)(` ${shortcut.key} `))} ${fg(colors.textDim)(shortcut.label)}`,
+      content: t`${bg(colors.borderDim)(fg(colors.textBold)(` ${shortcutKey} `))} ${fg(colors.textDim)(shortcut.label)}`,
     })
     statusBar.add(shortcutText)
   }

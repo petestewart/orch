@@ -2,25 +2,36 @@ import {
   BoxRenderable,
   TextRenderable,
   ScrollBoxRenderable,
-  InputRenderable,
   t,
   fg,
-  bg,
   dim,
   type RenderContext,
-  InputRenderableEvents,
 } from '@opentui/core'
 import { colors } from '../utils/colors.js'
+import { renderChatInputContent } from '../utils/chat-input.js'
 import type { ChatMessage } from '../state/types.js'
 
 export interface ChatPanelProps {
   messages: ChatMessage[]
   onSendMessage?: (content: string) => void
   placeholder?: string
+  isInputActive?: boolean
+  currentInput?: string
+  cursorIndex?: number
+  onInputReady?: (lines: TextRenderable[]) => void
+  inactiveInputColor?: string
 }
 
 export function createChatPanel(ctx: RenderContext, props: ChatPanelProps): BoxRenderable {
-  const { messages, onSendMessage, placeholder = 'Type a message...' } = props
+  const {
+    messages,
+    onSendMessage,
+    placeholder = 'Type a message...',
+    isInputActive = true,
+    currentInput,
+    cursorIndex = 0,
+    inactiveInputColor = colors.textDim,
+  } = props
 
   // Main container - vertical layout
   // ┌─────────────────────────────────────────────────────────────────┐
@@ -76,35 +87,26 @@ export function createChatPanel(ctx: RenderContext, props: ChatPanelProps): BoxR
   const inputWrapper = new BoxRenderable(ctx, {
     width: '100%',
     flexDirection: 'column',
-    border: true,
-    borderStyle: 'single',
-    borderColor: colors.border,
-    padding: 0,
-  })
-
-  // Input field at bottom
-  const inputField = new InputRenderable(ctx, {
-    width: '100%',
-    height: 1,
-    placeholder,
-    placeholderColor: colors.textMuted,
-    cursorColor: colors.cyan,
-    textColor: colors.text,
     backgroundColor: colors.activeBg,
+    paddingLeft: 1,
+    paddingRight: 1,
+    paddingTop: 0,
+    paddingBottom: 0,
   })
 
-  // Handle message submission
-  if (onSendMessage) {
-    inputField.on(InputRenderableEvents.ENTER, (event: any) => {
-      const content = inputField.value?.trim()
-      if (content) {
-        onSendMessage(content)
-        inputField.value = ''
-      }
-    })
+  const value = currentInput ?? ''
+  const { lines } = renderChatInputContent({
+    text: value,
+    cursorIndex,
+    placeholder,
+    isActive: isInputActive,
+    inactiveColor: inactiveInputColor,
+  })
+  const lineRenderables = lines.map((content) => new TextRenderable(ctx, { content }))
+  lineRenderables.forEach((line) => inputWrapper.add(line))
+  if (props.onInputReady) {
+    props.onInputReady(lineRenderables)
   }
-
-  inputWrapper.add(inputField)
   container.add(inputWrapper)
 
   return container

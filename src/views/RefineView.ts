@@ -2,8 +2,6 @@ import {
   BoxRenderable,
   TextRenderable,
   ScrollBoxRenderable,
-  InputRenderable,
-  InputRenderableEvents,
   t,
   fg,
   bold,
@@ -11,6 +9,7 @@ import {
   type RenderContext,
 } from '@opentui/core'
 import { colors } from '../utils/colors.js'
+import { renderChatInputContent } from '../utils/chat-input.js'
 import { createChatPanel } from '../components/ChatPanel.js'
 import type { Store } from '../state/store.js'
 import type { ChatMessage, Ticket, AuditFindingUI, TicketProposalUI } from '../state/types.js'
@@ -21,10 +20,11 @@ export interface RefineViewProps {
   activePane: 'sidebar' | 'chat' | 'audit'
   /** T036: Callback when user sends a message in the chat */
   onSendMessage?: (content: string) => void
+  onChatInputReady?: (lines: TextRenderable[]) => void
 }
 
 export function createRefineView(ctx: RenderContext, props: RefineViewProps): BoxRenderable {
-  const { store, selectedTicketIndex, activePane, onSendMessage } = props
+  const { store, selectedTicketIndex, activePane, onSendMessage, onChatInputReady } = props
   const state = store.getState()
   const tickets = state.tickets
 
@@ -204,6 +204,10 @@ export function createRefineView(ctx: RenderContext, props: RefineViewProps): Bo
       selectedProposalIndex,
       isActive: activePane === 'chat',
       currentInput: state.refineViewChatInput,
+      isInputActive: state.refineViewChatInputMode,
+      inactiveInputColor: colors.textDim,
+      onInputReady: onChatInputReady,
+      cursorIndex: state.refineViewChatCursor,
       onSendMessage, // T036: Connect to Refine Agent
     })
     chatWrapper.add(chatPanel)
@@ -212,8 +216,8 @@ export function createRefineView(ctx: RenderContext, props: RefineViewProps): Bo
     // Chat footer with hints - show different hints based on state
     const hasProposals = proposals.length > 0
     const footerHint = hasProposals
-      ? 'j/k: nav  Space: select  c: create  e: edit  Shift+A: audit'
-      : 'Type to describe a task  Shift+A: audit plan'
+      ? 'Ctrl+J/K: nav  Ctrl+Space: select  Ctrl+C: create  Ctrl+E: edit  Ctrl+Shift+A: audit  Esc: command  i: input'
+      : 'Type to describe a task  Ctrl+Shift+A: audit  Esc: command  i: input'
     const chatFooter = new TextRenderable(ctx, {
       content: t`${dim(fg(colors.textMuted)(footerHint))}`,
     })
@@ -563,15 +567,19 @@ interface TicketCreationChatProps {
   selectedProposalIndex: number
   isActive: boolean
   currentInput: string
+  isInputActive: boolean
+  inactiveInputColor?: string
   /** T036: Callback when user sends a message */
   onSendMessage?: (content: string) => void
+  onInputReady?: (lines: TextRenderable[]) => void
+  cursorIndex: number
 }
 
 /**
  * Create a chat panel for AI-assisted ticket creation (T035, T036)
  */
 function createTicketCreationChat(ctx: RenderContext, props: TicketCreationChatProps): BoxRenderable {
-  const { messages, proposals, selectedProposalIndex, isActive, currentInput, onSendMessage } = props
+  const { messages, proposals, selectedProposalIndex, isActive, currentInput, isInputActive, inactiveInputColor, cursorIndex, onSendMessage } = props
 
   const container = new BoxRenderable(ctx, {
     width: '100%',
@@ -773,38 +781,31 @@ function createTicketCreationChat(ctx: RenderContext, props: TicketCreationChatP
   container.add(contentArea)
 
   // T036: Add input field for sending messages to the Refine agent
-  if (onSendMessage && isActive) {
+  if (onSendMessage) {
     const inputWrapper = new BoxRenderable(ctx, {
       width: '100%',
       flexDirection: 'column',
-      border: true,
-      borderStyle: 'single',
-      borderColor: colors.border,
-      padding: 0,
+      backgroundColor: colors.activeBg,
+      paddingLeft: 1,
+      paddingRight: 1,
+      paddingTop: 0,
+      paddingBottom: 0,
       marginTop: 1,
     })
 
-    const inputField = new InputRenderable(ctx, {
-      width: '100%',
-      height: 1,
+    const canSend = isActive && isInputActive
+    const { lines } = renderChatInputContent({
+      text: currentInput,
+      cursorIndex,
       placeholder: 'Describe a task to create tickets...',
-      placeholderColor: colors.textMuted,
-      cursorColor: colors.cyan,
-      textColor: colors.text,
-      backgroundColor: colors.activeBg,
-      value: currentInput,
+      isActive: canSend,
+      inactiveColor: inactiveInputColor ?? colors.textDim,
     })
-
-    // Handle message submission
-    inputField.on(InputRenderableEvents.ENTER, (event: unknown) => {
-      const content = inputField.value?.trim()
-      if (content && onSendMessage) {
-        onSendMessage(content)
-        inputField.value = ''
-      }
-    })
-
-    inputWrapper.add(inputField)
+    const lineRenderables = lines.map((content) => new TextRenderable(ctx, { content }))
+    lineRenderables.forEach((line) => inputWrapper.add(line))
+    if (props.onInputReady) {
+      props.onInputReady(lineRenderables)
+    }
     container.add(inputWrapper)
   }
 

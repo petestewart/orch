@@ -29,6 +29,7 @@ import { PlanStore, type ParsedPlan } from './core/plan-store.js'
 import type { TicketPriority, AgentProgressEvent } from './core/types.js'
 import { proposalToTicket, parseTicketProposals, containsProposals, autoAssignEpic } from './core/ticket-proposal.js'
 import { AgentManager, type RefineAgentResult } from './core/agent-manager.js'
+import { renderChatInputContent } from './utils/chat-input.js'
 
 export class App {
   private renderer!: CliRenderer
@@ -47,6 +48,12 @@ export class App {
 
   // Help overlay reference (T019)
   private helpOverlayComponent: BoxRenderable | null = null
+  private planChatInputLines: TextRenderable[] = []
+  private refineChatInputLines: TextRenderable[] = []
+  private planChatLineCount: number = 1
+  private refineChatLineCount: number = 1
+  private readonly planChatPlaceholder = 'Type your planning question...'
+  private readonly refineChatPlaceholder = 'Describe a task to create tickets...'
 
   // Cached plan for audit (T038)
   private cachedPlan: ParsedPlan | null = null
@@ -113,11 +120,7 @@ export class App {
     })
 
     // Status bar
-    this.statusBar = createStatusBar(this.ctx, {
-      currentView: state.currentView,
-      pendingApprovalsCount: this.store.getPendingApprovalsCount(),
-      totalCost: this.store.getTotalCost(), // T025: Cost Tracking
-    })
+    this.statusBar = this.createStatusBar(state)
 
     // Add to main container
     this.mainContainer.add(this.header)
@@ -135,9 +138,19 @@ export class App {
   private setupKeyboardHandlers() {
     this.renderer.keyInput.on('keypress', (key) => {
       const state = this.store.getState()
+      const isChatPaneActive = (
+        (state.currentView === 'plan' && state.planViewActivePane === 'chat') ||
+        (state.currentView === 'refine' && state.refineViewActivePane === 'chat')
+      )
+      const isChatInputMode = isChatPaneActive && (
+        state.currentView === 'plan'
+          ? state.planViewChatInputMode
+          : state.refineViewChatInputMode
+      )
+      const allowGlobalShortcut = !isChatPaneActive || !isChatInputMode || key.ctrl
 
-      // Handle help overlay toggle with '?' (T019)
-      if (key.name === '?') {
+      // Handle help overlay toggle with '?' or Ctrl+/
+      if ((key.name === '?' && allowGlobalShortcut) || (key.ctrl && key.name === '/')) {
         this.toggleHelpOverlay()
         return
       }
@@ -165,13 +178,13 @@ export class App {
       }
 
       // Handle quit
-      if (key.name === 'q' || (key.ctrl && key.name === 'c')) {
+      if ((key.name === 'q' && allowGlobalShortcut) || (key.ctrl && key.name === 'c' && (!isChatPaneActive || !isChatInputMode))) {
         this.quit()
         return
       }
 
       // Handle tab switching with number keys
-      if (key.name && /^[1-5]$/.test(key.name)) {
+      if (key.name && /^[1-5]$/.test(key.name) && allowGlobalShortcut) {
         const view = getViewByNumber(parseInt(key.name, 10))
         if (view) {
           this.switchView(view)
@@ -197,20 +210,151 @@ export class App {
     }
 
     // Update status bar
-    this.mainContainer.remove(this.statusBar.id)
-    this.statusBar = createStatusBar(this.ctx, {
-      currentView: view,
-      pendingApprovalsCount: this.store.getPendingApprovalsCount(),
-      totalCost: this.store.getTotalCost(), // T025: Cost Tracking
-    })
-    this.mainContainer.add(this.statusBar)
+    this.renderStatusBar()
 
     // Render new view
     this.renderCurrentView()
   }
 
+  private createStatusBar(state: AppState): BoxRenderable {
+    const isChatPaneActive = (
+      (state.currentView === 'plan' && state.planViewActivePane === 'chat') ||
+      (state.currentView === 'refine' && state.refineViewActivePane === 'chat')
+    )
+    const chatInputMode = state.currentView === 'plan'
+      ? state.planViewChatInputMode
+      : state.refineViewChatInputMode
+
+    return createStatusBar(this.ctx, {
+      currentView: state.currentView,
+      pendingApprovalsCount: this.store.getPendingApprovalsCount(),
+      totalCost: this.store.getTotalCost(), // T025: Cost Tracking
+      chatPaneActive: isChatPaneActive,
+      chatInputMode: isChatPaneActive ? chatInputMode : undefined,
+      ctrlPrefixShortcuts: isChatPaneActive && chatInputMode,
+    })
+  }
+
+  private renderStatusBar() {
+    if (this.statusBar) {
+      this.mainContainer.remove(this.statusBar.id)
+    }
+    this.statusBar = this.createStatusBar(this.store.getState())
+    this.mainContainer.add(this.statusBar)
+  }
+
+  private buildChatInputContent(value: string, options: {
+    placeholder: string
+    isActive: boolean
+    inactiveColor: string
+    cursorIndex: number
+  }) {
+    return renderChatInputContent({
+      text: value,
+      cursorIndex: options.cursorIndex,
+      placeholder: options.placeholder,
+      isActive: options.isActive,
+      inactiveColor: options.inactiveColor,
+    })
+  }
+
+  private setPlanChatInputValue(value: string): boolean {
+    this.store.setPlanViewChatInput(value)
+    if (this.planChatInputLines.length > 0) {
+      const isActive = this.store.getState().planViewActivePane === 'chat'
+        && this.store.getState().planViewChatInputMode
+      const { lines, lineCount } = this.buildChatInputContent(value, {
+        placeholder: this.planChatPlaceholder,
+        isActive,
+        inactiveColor: colors.textDim,
+        cursorIndex: this.store.getState().planViewChatCursor,
+      })
+      this.planChatInputLines.forEach((line, index) => {
+        line.content = lines[index] ?? lines[lines.length - 1]
+      })
+      if (lineCount !== this.planChatLineCount) {
+        this.planChatLineCount = lineCount
+        this.renderCurrentView()
+      }
+      return true
+    }
+    return false
+  }
+
+  private setRefineChatInputValue(value: string): boolean {
+    this.store.setRefineViewChatInput(value)
+    if (this.refineChatInputLines.length > 0) {
+      const state = this.store.getState()
+      const isActive = state.refineViewActivePane === 'chat'
+        && state.refineViewChatInputMode
+        && !state.editingProposal
+      const { lines, lineCount } = this.buildChatInputContent(value, {
+        placeholder: this.refineChatPlaceholder,
+        isActive,
+        inactiveColor: colors.textDim,
+        cursorIndex: state.refineViewChatCursor,
+      })
+      this.refineChatInputLines.forEach((line, index) => {
+        line.content = lines[index] ?? lines[lines.length - 1]
+      })
+      if (lineCount !== this.refineChatLineCount) {
+        this.refineChatLineCount = lineCount
+        this.renderCurrentView()
+      }
+      return true
+    }
+    return false
+  }
+
+  private updatePlanChatInput(text: string, cursorIndex: number): void {
+    const clampedCursor = Math.max(0, Math.min(cursorIndex, text.length))
+    this.store.setPlanViewChatCursor(clampedCursor)
+    const updated = this.setPlanChatInputValue(text)
+    if (!updated) {
+      this.renderCurrentView()
+    }
+  }
+
+  private updateRefineChatInput(text: string, cursorIndex: number): void {
+    const clampedCursor = Math.max(0, Math.min(cursorIndex, text.length))
+    this.store.setRefineViewChatCursor(clampedCursor)
+    const updated = this.setRefineChatInputValue(text)
+    if (!updated) {
+      this.renderCurrentView()
+    }
+  }
+
+  private getCursorPosition(text: string, cursorIndex: number): { line: number; col: number; lines: string[] } {
+    const lines = text.split('\n')
+    let remaining = Math.max(0, Math.min(cursorIndex, text.length))
+    let line = 0
+    let col = 0
+
+    for (let i = 0; i < lines.length; i += 1) {
+      const length = lines[i].length
+      if (remaining <= length) {
+        line = i
+        col = remaining
+        break
+      }
+      remaining -= length + 1
+    }
+
+    return { line, col, lines }
+  }
+
+  private getIndexFromLineCol(lines: string[], line: number, col: number): number {
+    let index = 0
+    for (let i = 0; i < line; i += 1) {
+      index += lines[i].length + 1
+    }
+    return index + col
+  }
+
   private renderCurrentView() {
     const state = this.store.getState()
+    this.planChatInputLines = []
+    this.refineChatInputLines = []
 
     // Remove current view if exists
     if (this.currentViewComponent) {
@@ -285,6 +429,21 @@ export class App {
         onSendMessage: (content) => {
           this.handlePlanChatMessage(content)
         },
+        onChatInputReady: (lines) => {
+          this.planChatInputLines = lines
+          const state = this.store.getState()
+          const isActive = state.planViewActivePane === 'chat' && state.planViewChatInputMode
+          const { lines: contentLines, lineCount } = this.buildChatInputContent(state.planViewChatInput, {
+            placeholder: this.planChatPlaceholder,
+            isActive,
+            inactiveColor: colors.textDim,
+            cursorIndex: state.planViewChatCursor,
+          })
+          this.planChatLineCount = lineCount
+          this.planChatInputLines.forEach((line, index) => {
+            line.content = contentLines[index] ?? contentLines[contentLines.length - 1]
+          })
+        },
       })
     } else if (state.currentView === 'refine') {
       viewContent = createRefineView(this.ctx, {
@@ -294,6 +453,23 @@ export class App {
         // T036: Connect Refine Agent for AI-assisted ticket creation
         onSendMessage: (content) => {
           this.handleRefineChatMessage(content)
+        },
+        onChatInputReady: (lines) => {
+          this.refineChatInputLines = lines
+          const state = this.store.getState()
+          const isActive = state.refineViewActivePane === 'chat'
+            && state.refineViewChatInputMode
+            && !state.editingProposal
+          const { lines: contentLines, lineCount } = this.buildChatInputContent(state.refineViewChatInput, {
+            placeholder: this.refineChatPlaceholder,
+            isActive,
+            inactiveColor: colors.textDim,
+            cursorIndex: state.refineViewChatCursor,
+          })
+          this.refineChatLineCount = lineCount
+          this.refineChatInputLines.forEach((line, index) => {
+            line.content = contentLines[index] ?? contentLines[contentLines.length - 1]
+          })
         },
       })
     } else {
@@ -633,6 +809,107 @@ export class App {
   private handlePlanKeypress(key: { name?: string; ctrl?: boolean; shift?: boolean }) {
     const state = this.store.getState()
     let needsRerender = false
+    const isChatPaneActive = state.planViewActivePane === 'chat'
+    const isChatInputMode = isChatPaneActive && state.planViewChatInputMode
+
+    if (isChatPaneActive && !key.ctrl) {
+      if (key.name === 'escape' && state.planViewChatInputMode) {
+        this.store.setPlanViewChatInputMode(false)
+        this.updatePlanChatInput(state.planViewChatInput, state.planViewChatCursor)
+        this.renderCurrentView()
+        this.renderStatusBar()
+        return
+      }
+
+      if (key.name === 'i' && !state.planViewChatInputMode) {
+        this.store.setPlanViewChatInputMode(true)
+        this.updatePlanChatInput(state.planViewChatInput, state.planViewChatCursor)
+        this.renderCurrentView()
+        this.renderStatusBar()
+        return
+      }
+    }
+
+    if (state.planViewActivePane === 'chat' && state.planViewChatInputMode && !key.ctrl) {
+      const currentInput = state.planViewChatInput
+      const currentCursor = state.planViewChatCursor
+      if (key.name === 'left') {
+        this.updatePlanChatInput(currentInput, currentCursor - 1)
+        return
+      }
+      if (key.name === 'right') {
+        this.updatePlanChatInput(currentInput, currentCursor + 1)
+        return
+      }
+      if (key.name === 'up' || key.name === 'down') {
+        const { line, col, lines } = this.getCursorPosition(currentInput, currentCursor)
+        const nextLine = key.name === 'up' ? line - 1 : line + 1
+        if (nextLine >= 0 && nextLine < lines.length) {
+          const nextCol = Math.min(col, lines[nextLine].length)
+          const nextIndex = this.getIndexFromLineCol(lines, nextLine, nextCol)
+          this.updatePlanChatInput(currentInput, nextIndex)
+        }
+        return
+      }
+      if (key.name === 'home') {
+        const { line, lines } = this.getCursorPosition(currentInput, currentCursor)
+        const nextIndex = this.getIndexFromLineCol(lines, line, 0)
+        this.updatePlanChatInput(currentInput, nextIndex)
+        return
+      }
+      if (key.name === 'end') {
+        const { line, lines } = this.getCursorPosition(currentInput, currentCursor)
+        const nextIndex = this.getIndexFromLineCol(lines, line, lines[line].length)
+        this.updatePlanChatInput(currentInput, nextIndex)
+        return
+      }
+      if (key.name === 'return') {
+        if (key.shift) {
+          const nextText = `${currentInput.slice(0, currentCursor)}\n${currentInput.slice(currentCursor)}`
+          this.updatePlanChatInput(nextText, currentCursor + 1)
+          return
+        }
+
+        const input = currentInput.trim()
+        if (input) {
+          this.handlePlanChatMessage(input)
+          this.updatePlanChatInput('', 0)
+        }
+        return
+      }
+
+      if (key.name === 'backspace') {
+        if (currentCursor > 0) {
+          const nextText = `${currentInput.slice(0, currentCursor - 1)}${currentInput.slice(currentCursor)}`
+          this.updatePlanChatInput(nextText, currentCursor - 1)
+        }
+        return
+      }
+
+      if (key.name === 'delete') {
+        if (currentCursor < currentInput.length) {
+          const nextText = `${currentInput.slice(0, currentCursor)}${currentInput.slice(currentCursor + 1)}`
+          this.updatePlanChatInput(nextText, currentCursor)
+        }
+        return
+      }
+
+      if (key.name === 'space') {
+        const nextText = `${currentInput.slice(0, currentCursor)} ${currentInput.slice(currentCursor)}`
+        this.updatePlanChatInput(nextText, currentCursor + 1)
+        return
+      }
+
+      if (key.name && key.name.length === 1 && !key.shift) {
+        const nextText = `${currentInput.slice(0, currentCursor)}${key.name}${currentInput.slice(currentCursor)}`
+        this.updatePlanChatInput(nextText, currentCursor + 1)
+        return
+      } else if (key.shift && key.name && key.name.length === 1) {
+        const nextText = `${currentInput.slice(0, currentCursor)}${key.name.toUpperCase()}${currentInput.slice(currentCursor)}`
+        this.updatePlanChatInput(nextText, currentCursor + 1)
+        return
+      }
+    }
 
     // Tab to switch between chat and docs pane
     if (key.name === 'tab') {
@@ -661,6 +938,11 @@ export class App {
 
     if (needsRerender) {
       this.renderCurrentView()
+      if (isChatPaneActive !== (state.planViewActivePane === 'chat')) {
+        this.renderStatusBar()
+      } else if (isChatPaneActive && isChatInputMode !== state.planViewChatInputMode) {
+        this.renderStatusBar()
+      }
     }
   }
 
@@ -779,9 +1061,12 @@ Could you please provide more details about what you'd like to accomplish?`
     const state = this.store.getState()
     const ticketCount = state.tickets.length
     let needsRerender = false
+    const isChatPaneActive = state.refineViewActivePane === 'chat'
+    const isChatInputMode = isChatPaneActive && state.refineViewChatInputMode
+    const allowChatShortcut = !isChatPaneActive || !isChatInputMode || key.ctrl
 
     // 'A' key (uppercase/Shift+A) triggers plan audit (T038)
-    if (key.name === 'a' && key.shift) {
+    if (key.name === 'a' && key.shift && allowChatShortcut) {
       this.triggerPlanAudit()
       return
     }
@@ -797,8 +1082,26 @@ Could you please provide more details about what you'd like to accomplish?`
       }
     }
 
+    if (isChatPaneActive && !key.ctrl) {
+      if (key.name === 'escape' && state.refineViewChatInputMode && !state.editingProposal) {
+        this.store.setRefineViewChatInputMode(false)
+        this.updateRefineChatInput(state.refineViewChatInput, state.refineViewChatCursor)
+        this.renderCurrentView()
+        this.renderStatusBar()
+        return
+      }
+
+      if (key.name === 'i' && !state.refineViewChatInputMode && !state.editingProposal) {
+        this.store.setRefineViewChatInputMode(true)
+        this.updateRefineChatInput(state.refineViewChatInput, state.refineViewChatCursor)
+        this.renderCurrentView()
+        this.renderStatusBar()
+        return
+      }
+    }
+
     // 'c' key creates selected proposals as tickets (T035)
-    if (key.name === 'c' && state.refineViewActivePane === 'chat') {
+    if (key.name === 'c' && state.refineViewActivePane === 'chat' && allowChatShortcut) {
       if (state.ticketProposals.length > 0) {
         this.createProposedTickets()
         return
@@ -806,7 +1109,7 @@ Could you please provide more details about what you'd like to accomplish?`
     }
 
     // 'e' key starts editing the selected proposal (T035)
-    if (key.name === 'e' && state.refineViewActivePane === 'chat') {
+    if (key.name === 'e' && state.refineViewActivePane === 'chat' && allowChatShortcut) {
       const proposal = state.ticketProposals[state.selectedProposalIndex]
       if (proposal && !state.editingProposal) {
         this.store.startEditingProposal(proposal)
@@ -821,45 +1124,97 @@ Could you please provide more details about what you'd like to accomplish?`
     }
 
     // Space key toggles proposal selection (T035)
-    if (key.name === 'space' && state.refineViewActivePane === 'chat' && !state.editingProposal) {
+    if (key.name === 'space' && state.refineViewActivePane === 'chat' && !state.editingProposal && allowChatShortcut) {
       if (state.ticketProposals.length > 0) {
         this.store.toggleProposalSelection()
         needsRerender = true
       }
     }
 
-    // T036: Handle text input in chat pane when no proposals yet
-    if (state.refineViewActivePane === 'chat' && state.ticketProposals.length === 0 && !state.editingProposal) {
+    // T036: Handle text input in chat pane
+    if (state.refineViewActivePane === 'chat' && !state.editingProposal && state.refineViewChatInputMode && !key.ctrl) {
+      const currentInput = state.refineViewChatInput
+      const currentCursor = state.refineViewChatCursor
+      if (key.name === 'left') {
+        this.updateRefineChatInput(currentInput, currentCursor - 1)
+        return
+      }
+      if (key.name === 'right') {
+        this.updateRefineChatInput(currentInput, currentCursor + 1)
+        return
+      }
+      if (key.name === 'up' || key.name === 'down') {
+        const { line, col, lines } = this.getCursorPosition(currentInput, currentCursor)
+        const nextLine = key.name === 'up' ? line - 1 : line + 1
+        if (nextLine >= 0 && nextLine < lines.length) {
+          const nextCol = Math.min(col, lines[nextLine].length)
+          const nextIndex = this.getIndexFromLineCol(lines, nextLine, nextCol)
+          this.updateRefineChatInput(currentInput, nextIndex)
+        }
+        return
+      }
+      if (key.name === 'home') {
+        const { line, lines } = this.getCursorPosition(currentInput, currentCursor)
+        const nextIndex = this.getIndexFromLineCol(lines, line, 0)
+        this.updateRefineChatInput(currentInput, nextIndex)
+        return
+      }
+      if (key.name === 'end') {
+        const { line, lines } = this.getCursorPosition(currentInput, currentCursor)
+        const nextIndex = this.getIndexFromLineCol(lines, line, lines[line].length)
+        this.updateRefineChatInput(currentInput, nextIndex)
+        return
+      }
       // Handle Enter to send message
       if (key.name === 'return') {
-        const input = state.refineViewChatInput.trim()
+        if (key.shift) {
+          const nextText = `${currentInput.slice(0, currentCursor)}\n${currentInput.slice(currentCursor)}`
+          this.updateRefineChatInput(nextText, currentCursor + 1)
+          return
+        }
+
+        const input = currentInput.trim()
         if (input) {
           this.handleRefineChatMessage(input)
-          this.store.setRefineViewChatInput('')
+          this.updateRefineChatInput('', 0)
         }
         return
       }
 
       // Handle backspace to delete character
       if (key.name === 'backspace') {
-        const input = state.refineViewChatInput
-        if (input.length > 0) {
-          this.store.setRefineViewChatInput(input.slice(0, -1))
+        if (currentCursor > 0) {
+          const nextText = `${currentInput.slice(0, currentCursor - 1)}${currentInput.slice(currentCursor)}`
+          this.updateRefineChatInput(nextText, currentCursor - 1)
         }
-        needsRerender = true
+        return
+      }
+
+      if (key.name === 'delete') {
+        if (currentCursor < currentInput.length) {
+          const nextText = `${currentInput.slice(0, currentCursor)}${currentInput.slice(currentCursor + 1)}`
+          this.updateRefineChatInput(nextText, currentCursor)
+        }
+        return
+      }
+
+      // Handle space
+      if (key.name === 'space') {
+        const nextText = `${currentInput.slice(0, currentCursor)} ${currentInput.slice(currentCursor)}`
+        this.updateRefineChatInput(nextText, currentCursor + 1)
         return
       }
 
       // Handle printable characters
       if (key.name && key.name.length === 1 && !key.ctrl && !key.shift) {
         // Regular printable character
-        this.store.setRefineViewChatInput(state.refineViewChatInput + key.name)
-        needsRerender = true
+        const nextText = `${currentInput.slice(0, currentCursor)}${key.name}${currentInput.slice(currentCursor)}`
+        this.updateRefineChatInput(nextText, currentCursor + 1)
         return
       } else if (key.shift && key.name && key.name.length === 1) {
         // Shift+char - handle uppercase
-        this.store.setRefineViewChatInput(state.refineViewChatInput + key.name.toUpperCase())
-        needsRerender = true
+        const nextText = `${currentInput.slice(0, currentCursor)}${key.name.toUpperCase()}${currentInput.slice(currentCursor)}`
+        this.updateRefineChatInput(nextText, currentCursor + 1)
         return
       }
     }
@@ -902,7 +1257,7 @@ Could you please provide more details about what you'd like to accomplish?`
     }
 
     // When in chat pane with proposals, navigate proposals with j/k (T035)
-    if (state.refineViewActivePane === 'chat' && state.ticketProposals.length > 0 && !state.editingProposal) {
+    if (state.refineViewActivePane === 'chat' && state.ticketProposals.length > 0 && !state.editingProposal && allowChatShortcut) {
       if (key.name === 'j' || key.name === 'down') {
         this.store.nextProposal()
         needsRerender = true
@@ -925,6 +1280,11 @@ Could you please provide more details about what you'd like to accomplish?`
 
     if (needsRerender) {
       this.renderCurrentView()
+      if (isChatPaneActive !== (state.refineViewActivePane === 'chat')) {
+        this.renderStatusBar()
+      } else if (isChatPaneActive && isChatInputMode !== state.refineViewChatInputMode) {
+        this.renderStatusBar()
+      }
     }
   }
 
@@ -1013,8 +1373,17 @@ Could you please provide more details about what you'd like to accomplish?`
 
     // Add new overlay if needed
     if (state.showHelpOverlay) {
+      const isChatPaneActive = (
+        (state.currentView === 'plan' && state.planViewActivePane === 'chat') ||
+        (state.currentView === 'refine' && state.refineViewActivePane === 'chat')
+      )
+      const chatInputMode = state.currentView === 'plan'
+        ? state.planViewChatInputMode
+        : state.refineViewChatInputMode
       this.helpOverlayComponent = createHelpOverlay(this.ctx, {
         currentView: state.currentView,
+        chatPaneActive: isChatPaneActive,
+        chatInputMode: isChatPaneActive ? chatInputMode : undefined,
       })
       this.renderer.root.add(this.helpOverlayComponent)
     }

@@ -90,13 +90,18 @@ export interface AppState {
   planViewActivePane: 'chat' | 'docs'
   planViewActiveDoc: 'prd' | 'plan' | 'tickets'
   planViewChatMessages: ChatMessage[]
+  planViewChatInput: string
+  planViewChatCursor: number
   planViewPendingMessage: boolean // True when waiting for AI response
+  planViewChatInputMode: boolean // True when chat input captures typing
   // Refine view state
   refineViewActivePane: 'sidebar' | 'chat' | 'audit'
   refineViewSelectedTicket: number
   refineViewChatMessages: ChatMessage[]  // T035: Chat messages for ticket creation
   refineViewChatInput: string  // T036: Current input text in chat pane
+  refineViewChatCursor: number
   refineViewPendingMessage: boolean  // T035: Waiting for AI response
+  refineViewChatInputMode: boolean // True when chat input captures typing
   // T035: AI-Assisted Ticket Creation state
   ticketProposals: TicketProposalUI[]  // Proposed tickets from AI
   selectedProposalIndex: number  // Index of selected proposal

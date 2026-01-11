@@ -224,13 +224,18 @@ export class Store {
       planViewActivePane: 'chat',
       planViewActiveDoc: 'prd',
       planViewChatMessages: [],
+      planViewChatInput: '',
+      planViewChatCursor: 0,
       planViewPendingMessage: false,
+      planViewChatInputMode: true,
       // Refine view state
       refineViewActivePane: 'sidebar',
       refineViewSelectedTicket: 0,
       refineViewChatMessages: [],
       refineViewChatInput: '',
+      refineViewChatCursor: 0,
       refineViewPendingMessage: false,
+      refineViewChatInputMode: true,
       // T035: AI-Assisted Ticket Creation state
       ticketProposals: [],
       selectedProposalIndex: 0,
@@ -825,6 +830,21 @@ export class Store {
     this.notifyChange();
   }
 
+  setPlanViewChatInputMode(enabled: boolean) {
+    this.state.planViewChatInputMode = enabled;
+    this.notifyChange();
+  }
+
+  setPlanViewChatInput(text: string): void {
+    this.state.planViewChatInput = text;
+    this.notifyChange();
+  }
+
+  setPlanViewChatCursor(index: number): void {
+    this.state.planViewChatCursor = index;
+    this.notifyChange();
+  }
+
   setPlanViewActiveDoc(doc: 'prd' | 'plan' | 'tickets') {
     this.state.planViewActiveDoc = doc;
     this.notifyChange();
@@ -886,6 +906,16 @@ export class Store {
 
   setRefineViewActivePane(pane: 'sidebar' | 'chat' | 'audit') {
     this.state.refineViewActivePane = pane;
+    this.notifyChange();
+  }
+
+  setRefineViewChatInputMode(enabled: boolean) {
+    this.state.refineViewChatInputMode = enabled;
+    this.notifyChange();
+  }
+
+  setRefineViewChatCursor(index: number): void {
+    this.state.refineViewChatCursor = index;
     this.notifyChange();
   }
 

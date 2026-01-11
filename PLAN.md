@@ -239,6 +239,33 @@ After all acceptance criteria are met, output exactly:
 
 ## 7. Task Backlog
 
+### Ticket: T040 Chat Input Rendering Bug
+- **Priority:** P0
+- **Status:** Todo
+- **Owner:** Unassigned
+- **Scope:** Fix chat input rendering that shows `[object Object]` when using Shift+Enter / multiline input.
+- **Acceptance Criteria:**
+  - Multiline input renders without `[object Object]` artifacts
+  - Shift+Enter inserts a new line visually
+  - Works in both Plan and Refine views
+- **Validation Steps:**
+  - Manual test: type multiline message, navigate with arrows, send
+- **Notes:** Regression after switching chat input to custom multiline prompt renderer.
+
+### Ticket: T041 Chat Input Fallback Mode
+- **Priority:** P0
+- **Status:** Todo
+- **Owner:** Unassigned
+- **Scope:** Provide a safe fallback for chat input when multiline rendering fails.
+- **Acceptance Criteria:**
+  - Toggle or config to switch chat input to single-line mode
+  - Input remains usable without rendering artifacts
+  - Works in both Plan and Refine views
+- **Validation Steps:**
+  - Manual test: toggle fallback and send messages
+  - Manual test: fallback disables multiline rendering
+- **Notes:** Fallback should be easy to flip while investigating T040.
+
 ### Ticket: T001 Event Bus Implementation
 - **Priority:** P0
 - **Status:** Done
@@ -642,7 +669,7 @@ After all acceptance criteria are met, output exactly:
   - Manual test: type message, see response
   - Manual test: doc preview updates
 - **Notes:** Implementation complete. Chat message state in Store, PlanView uses Store for messages, mock AI responses generated contextually. DocPreview shows actual PLAN.md content. Tab switching works. Real AI integration deferred. 710 tests pass, typecheck passes.
-- **Dependencies:** T010
+  - Chat input uses input/command modes (Esc for command, i for input) to avoid shortcut conflicts; status bar shows INPUT/CMD while in chat
 
 ### Ticket: T021 Refine View Implementation
 - **Priority:** P2
@@ -659,7 +686,7 @@ After all acceptance criteria are met, output exactly:
   - `bun run typecheck` passes
   - Manual test: select ticket, see details
   - Manual test: refinement updates plan
-- **Notes:** Implementation complete. Sidebar with ticket list and status indicators, j/k navigation, selected ticket detail panel with metadata/acceptance criteria/dependencies, chat panel for refinement (mock AI), Shift+A triggers audit. Real AI integration deferred to T036. 710 tests pass, typecheck passes.
+- **Notes:** Implementation complete. Sidebar with ticket list and status indicators, j/k navigation, selected ticket detail panel with metadata/acceptance criteria/dependencies, chat panel for refinement (mock AI), Shift+A triggers audit outside chat, Ctrl+Shift+A triggers audit in chat. Real AI integration deferred to T036. 710 tests pass, typecheck passes.
 - **Dependencies:** T010, T003
 
 ### Ticket: T022 CLI Entry Point
@@ -965,8 +992,8 @@ After all acceptance criteria are met, output exactly:
   - AI proposes ticket(s) with: title, description, epic, priority, acceptance criteria, dependencies
   - User refines through conversation ("make smaller", "add validation")
   - AI auto-assigns epic based on file paths mentioned
-  - 'c' key creates the proposed ticket(s)
-  - 'e' key edits before creating
+  - Ctrl+C creates the proposed ticket(s) while in chat
+  - Ctrl+E edits before creating while in chat
   - New tickets appear in PLAN.md immediately
 - **Validation Steps:**
   - `bun run typecheck` passes
@@ -981,7 +1008,10 @@ After all acceptance criteria are met, output exactly:
     - Added TicketProposalUI to state/types.ts with selection state
     - Added store methods: setTicketProposals, nextProposal, prevProposal, toggleProposalSelection, etc.
     - Added refine chat state: refineViewChatMessages, refineViewPendingMessage
-    - Updated app.ts handleRefineKeypress() with 'c' (create), 'e' (edit), Space (toggle), j/k (nav)
+    - Updated app.ts handleRefineKeypress() with Ctrl+C (create), Ctrl+E (edit), Ctrl+Space (toggle), Ctrl+J/K (nav) in chat
+    - Chat panes now require Ctrl for app-wide shortcuts to avoid conflicts with typing
+    - Chat input mode defaults to input; Esc switches to command mode, i returns to input mode; Tab always switches panes; help toggles with ? or Ctrl+/ in input mode; status bar and help overlay show INPUT/CMD and prefix shortcuts with ^ when Ctrl is required, only showing i/Esc for the active mode
+    - Chat input uses a custom multiline prompt (no box) with cursor navigation (arrows/home/end) and Shift+Enter for new lines
     - Created createProposedTickets() method that converts UI proposals to core tickets
     - Updated RefineView.ts with createTicketCreationChat() to display proposals with selection UI
     - Added generateRefineResponse() mock AI for ticket creation (real AI in T036)
@@ -1014,7 +1044,7 @@ After all acceptance criteria are met, output exactly:
 - **Owner:** Completed
 - **Scope:** Implement automated plan analysis that identifies gaps, staleness, and inaccuracies.
 - **Acceptance Criteria:**
-  - 'A' key in Refine view triggers plan audit
+  - Shift+A triggers plan audit outside chat; Ctrl+Shift+A triggers it in chat
   - Audit compares tickets against PRD.md (if exists)
   - Audit analyzes codebase for coverage gaps
   - Detects: missing tickets, outdated tickets, inaccurate acceptance criteria
@@ -1028,7 +1058,7 @@ After all acceptance criteria are met, output exactly:
   - Manual test: audit detects missing ticket for implemented feature
   - Manual test: audit detects ticket for deleted code
   - Manual test: accept suggestion creates ticket correctly
-- **Notes:** Implementation complete. Core module src/core/plan-audit.ts with PRD comparison, codebase coverage analysis, dependency checking, staleness detection, orphaned ticket detection. RefineView.ts has audit findings panel with severity icons. Shift+A triggers audit in Refine view. 25 unit tests in plan-audit.test.ts. 671 tests pass, typecheck passes.
+- **Notes:** Implementation complete. Core module src/core/plan-audit.ts with PRD comparison, codebase coverage analysis, dependency checking, staleness detection, orphaned ticket detection. RefineView.ts has audit findings panel with severity icons. Shift+A triggers audit outside chat, Ctrl+Shift+A triggers audit while in chat. 25 unit tests in plan-audit.test.ts. 671 tests pass, typecheck passes.
   - Config support for planAudit.onRefineViewEntry already in config.ts validation
   - Note: Auto-accept suggestions feature deferred (would require more complex PlanStore write integration)
 - **Dependencies:** T036, T002
