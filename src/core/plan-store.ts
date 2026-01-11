@@ -7,7 +7,7 @@
  * Implements: T002, T003, T037
  */
 
-import type { Ticket, Epic, TicketPriority, TicketStatus } from './types';
+import type { Ticket, Epic, TicketPriority, TicketStatus, TicketStore } from './types';
 import { getEventBus } from './events';
 import { logPlanParseError, logError, PlanParseError } from './error-recovery';
 
@@ -32,7 +32,7 @@ export interface EpicWarning {
   message: string;
 }
 
-export class PlanStore {
+export class PlanStore implements TicketStore {
   private planPath: string;
   private plan: ParsedPlan | null = null;
   private watcher: unknown = null;
@@ -388,11 +388,218 @@ export class PlanStore {
    * Create a new ticket
    */
   async createTicket(ticket: Omit<Ticket, 'id'>): Promise<Ticket> {
-    // TODO: Implement - T035
-    // - Generate next ticket ID
-    // - Add to plan
-    // - Write to file
-    throw new Error('Not implemented');
+    const plan = this.getPlan();
+
+    // Generate next ticket ID
+    const existingIds = plan.tickets.map(t => {
+      const match = t.id.match(/^T(\d+)$/);
+      return match ? parseInt(match[1], 10) : 0;
+    });
+    const maxId = Math.max(0, ...existingIds);
+    const newId = `T${String(maxId + 1).padStart(3, '0')}`;
+
+    // Create the new ticket
+    const newTicket: Ticket = {
+      id: newId,
+      title: ticket.title,
+      description: ticket.description,
+      priority: ticket.priority,
+      status: ticket.status || 'Todo',
+      epic: ticket.epic,
+      owner: ticket.owner || 'Unassigned',
+      dependencies: ticket.dependencies || [],
+      acceptanceCriteria: ticket.acceptanceCriteria || [],
+      validationSteps: ticket.validationSteps || [],
+      notes: ticket.notes,
+    };
+
+    // Generate markdown for the new ticket
+    const ticketMarkdown = this.ticketToMarkdown(newTicket);
+
+    // Find the Task Backlog section and append the ticket
+    const backlogPattern = /^##\s*\d+\.\s*Task Backlog/im;
+    const match = plan.rawContent.match(backlogPattern);
+
+    if (!match) {
+      throw new Error('Could not find Task Backlog section in PLAN.md');
+    }
+
+    // Find the end of the Task Backlog section (next ## or end of file)
+    const backlogStart = match.index! + match[0].length;
+    const nextSectionMatch = plan.rawContent.slice(backlogStart).match(/^##\s*\d+\./m);
+
+    let insertPosition: number;
+    if (nextSectionMatch) {
+      insertPosition = backlogStart + nextSectionMatch.index!;
+    } else {
+      insertPosition = plan.rawContent.length;
+    }
+
+    // Insert the new ticket before the next section (or at end)
+    const updatedContent =
+      plan.rawContent.slice(0, insertPosition) +
+      '\n' + ticketMarkdown + '\n' +
+      plan.rawContent.slice(insertPosition);
+
+    // Write atomically
+    await this.writeAtomically(updatedContent);
+
+    // Update internal state
+    plan.tickets.push(newTicket);
+    plan.rawContent = updatedContent;
+
+    // Emit events
+    getEventBus().publish({
+      type: 'ticket:created',
+      timestamp: new Date(),
+      ticket: newTicket,
+    });
+
+    getEventBus().publish({
+      type: 'plan:updated',
+      timestamp: new Date(),
+    });
+
+    return newTicket;
+  }
+
+  /**
+   * Update a ticket's fields
+   */
+  async updateTicket(ticketId: string, updates: Partial<Omit<Ticket, 'id'>>): Promise<void> {
+    const ticket = this.getTicket(ticketId);
+    if (!ticket) {
+      throw new Error(`Ticket not found: ${ticketId}`);
+    }
+
+    // Apply updates to the ticket object
+    const updatedTicket: Ticket = { ...ticket, ...updates };
+
+    // Regenerate the markdown for this ticket
+    const newTicketMarkdown = this.ticketToMarkdown(updatedTicket);
+
+    // Find and replace the ticket section in raw content
+    const plan = this.getPlan();
+    const ticketPattern = new RegExp(
+      `(###\\s*Ticket:\\s*${ticketId}[\\s\\S]*?)(?=###\\s*Ticket:|##\\s*\\d+\\.|$)`,
+      'm'
+    );
+
+    const updatedContent = plan.rawContent.replace(ticketPattern, newTicketMarkdown + '\n');
+
+    if (updatedContent === plan.rawContent) {
+      throw new Error(`Could not find ticket ${ticketId} in PLAN.md`);
+    }
+
+    // Write atomically
+    await this.writeAtomically(updatedContent);
+
+    // Update internal state
+    Object.assign(ticket, updates);
+    plan.rawContent = updatedContent;
+
+    // Emit events
+    getEventBus().publish({
+      type: 'ticket:updated',
+      timestamp: new Date(),
+      ticketId,
+      updates,
+    });
+
+    getEventBus().publish({
+      type: 'plan:updated',
+      timestamp: new Date(),
+    });
+  }
+
+  /**
+   * Delete a ticket
+   */
+  async deleteTicket(ticketId: string): Promise<void> {
+    const ticket = this.getTicket(ticketId);
+    if (!ticket) {
+      throw new Error(`Ticket not found: ${ticketId}`);
+    }
+
+    const plan = this.getPlan();
+
+    // Find and remove the ticket section from raw content
+    const ticketPattern = new RegExp(
+      `###\\s*Ticket:\\s*${ticketId}[\\s\\S]*?(?=###\\s*Ticket:|##\\s*\\d+\\.|$)`,
+      'm'
+    );
+
+    const updatedContent = plan.rawContent.replace(ticketPattern, '');
+
+    if (updatedContent === plan.rawContent) {
+      throw new Error(`Could not find ticket ${ticketId} in PLAN.md`);
+    }
+
+    // Write atomically
+    await this.writeAtomically(updatedContent);
+
+    // Update internal state
+    const index = plan.tickets.findIndex(t => t.id === ticketId);
+    if (index !== -1) {
+      plan.tickets.splice(index, 1);
+    }
+    plan.rawContent = updatedContent;
+
+    // Emit events
+    getEventBus().publish({
+      type: 'ticket:deleted',
+      timestamp: new Date(),
+      ticketId,
+    });
+
+    getEventBus().publish({
+      type: 'plan:updated',
+      timestamp: new Date(),
+    });
+  }
+
+  /**
+   * Convert a Ticket object to markdown format
+   */
+  private ticketToMarkdown(ticket: Ticket): string {
+    const lines: string[] = [];
+
+    lines.push(`### Ticket: ${ticket.id} ${ticket.title}`);
+    lines.push(`- **Priority:** ${ticket.priority}`);
+    lines.push(`- **Status:** ${formatStatusForDisplay(ticket.status)}`);
+    lines.push(`- **Owner:** ${ticket.owner || 'Unassigned'}`);
+
+    if (ticket.epic) {
+      lines.push(`- **Epic:** ${ticket.epic}`);
+    }
+
+    if (ticket.description) {
+      lines.push(`- **Scope:** ${ticket.description}`);
+    }
+
+    if (ticket.acceptanceCriteria.length > 0) {
+      lines.push(`- **Acceptance Criteria:**`);
+      for (const criterion of ticket.acceptanceCriteria) {
+        lines.push(`  - ${criterion}`);
+      }
+    }
+
+    if (ticket.validationSteps.length > 0) {
+      lines.push(`- **Validation Steps:**`);
+      for (const step of ticket.validationSteps) {
+        lines.push(`  - ${step}`);
+      }
+    }
+
+    if (ticket.dependencies.length > 0) {
+      lines.push(`- **Dependencies:** ${ticket.dependencies.join(', ')}`);
+    }
+
+    if (ticket.notes) {
+      lines.push(`- **Notes:** ${ticket.notes}`);
+    }
+
+    return lines.join('\n');
   }
 
   /**

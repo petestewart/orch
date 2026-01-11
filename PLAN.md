@@ -1046,6 +1046,28 @@ After all acceptance criteria are met, output exactly:
     - typecheck passes
 - **Dependencies:** T002
 
+### Ticket: T039 Manual Ticket CRUD UI
+- **Priority:** P1
+- **Status:** Todo
+- **Owner:** Unassigned
+- **Scope:** Add TUI commands/views for users to manually create, edit, and delete tickets without editing PLAN.md directly.
+- **Acceptance Criteria:**
+  - User can create a new ticket via TUI command or form
+  - User can edit ticket fields (title, description, priority, status, epic, dependencies, acceptance criteria, validation steps)
+  - User can delete a ticket with confirmation
+  - Changes persist to PLAN.md through TicketStore interface
+  - Events (ticket:created, ticket:updated, ticket:deleted) are emitted
+- **Validation Steps:**
+  - `bun run typecheck` passes
+  - `bun test` passes
+  - Manual test: create ticket via TUI, verify in PLAN.md
+  - Manual test: edit ticket via TUI, verify changes in PLAN.md
+  - Manual test: delete ticket via TUI, verify removed from PLAN.md
+- **Notes:**
+  - TicketStore interface already implemented in T037 with createTicket(), updateTicket(), deleteTicket() methods
+  - Event types (ticket:created, ticket:updated, ticket:deleted) already defined in types.ts
+- **Dependencies:** T037
+
 ## 8. Open Questions
 
 1. **Agent model selection:** Should users be able to specify different models (Haiku vs Sonnet vs Opus) per ticket based on complexity? Currently config allows setting model for review/qa agents separately.

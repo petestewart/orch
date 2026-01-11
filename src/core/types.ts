@@ -37,6 +37,30 @@ export interface Ticket {
 }
 
 // =============================================================================
+// Ticket Store Interface
+// =============================================================================
+
+/**
+ * Abstract interface for ticket storage operations.
+ * Allows swapping storage backends (PLAN.md, file-per-ticket, database, etc.)
+ */
+export interface TicketStore {
+  // Read operations
+  getTickets(): Ticket[];
+  getTicket(id: string): Ticket | undefined;
+
+  // Write operations
+  createTicket(ticket: Omit<Ticket, 'id'>): Promise<Ticket>;
+  updateTicket(ticketId: string, updates: Partial<Omit<Ticket, 'id'>>): Promise<void>;
+  deleteTicket(ticketId: string): Promise<void>;
+
+  // Convenience methods
+  updateTicketStatus(ticketId: string, status: TicketStatus, reason?: string): Promise<void>;
+  updateTicketOwner(ticketId: string, owner: string): Promise<void>;
+  addTicketFeedback(ticketId: string, feedback: string): Promise<void>;
+}
+
+// =============================================================================
 // Epic Types
 // =============================================================================
 
@@ -166,6 +190,9 @@ export type EventType =
   | 'plan:error'
 
   // Ticket events
+  | 'ticket:created'
+  | 'ticket:updated'
+  | 'ticket:deleted'
   | 'ticket:status-changed'
   | 'ticket:assigned'
   | 'ticket:unassigned'
@@ -197,6 +224,22 @@ export interface PlanLoadedEvent extends BaseEvent {
   type: 'plan:loaded';
   tickets: Ticket[];
   epics: Epic[];
+}
+
+export interface TicketCreatedEvent extends BaseEvent {
+  type: 'ticket:created';
+  ticket: Ticket;
+}
+
+export interface TicketUpdatedEvent extends BaseEvent {
+  type: 'ticket:updated';
+  ticketId: string;
+  updates: Partial<Omit<Ticket, 'id'>>;
+}
+
+export interface TicketDeletedEvent extends BaseEvent {
+  type: 'ticket:deleted';
+  ticketId: string;
 }
 
 export interface TicketStatusChangedEvent extends BaseEvent {
@@ -268,6 +311,9 @@ export interface LogEntryEvent extends BaseEvent {
 // Union of all event types
 export type OrchEvent =
   | PlanLoadedEvent
+  | TicketCreatedEvent
+  | TicketUpdatedEvent
+  | TicketDeletedEvent
   | TicketStatusChangedEvent
   | AgentProgressEvent
   | AgentSpawnedEvent
