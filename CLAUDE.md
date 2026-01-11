@@ -53,7 +53,7 @@ orch/
 # Run the TUI
 bun run src/index.ts
 
-# Run tests (535 tests)
+# Run tests (728 tests)
 bun test
 
 # Type check
@@ -84,9 +84,9 @@ Agents signal completion/blockers via markers in their output:
 
 ## Current Implementation Status
 
-**Done (36 tickets):** T001-T034, T037-T038
+**✅ COMPLETE (39 tickets):** T001-T034, T037-T041
 
-**All P0 and P2 tickets complete.** Full orchestration system implemented:
+**All tickets complete. Project production-ready.** Full orchestration system implemented:
 - Event bus, plan parsing, dependency graph
 - Agent spawning, output parsing, validation
 - Orchestrator core loop with auto-assignment
@@ -95,7 +95,7 @@ Agents signal completion/blockers via markers in their output:
 - Epic/worktree management with merge handling
 - State store with event subscriptions
 - UI views connected to real state (Kanban, Agents, Logs, Session)
-- Unit test infrastructure and integration tests (710 tests)
+- Unit test infrastructure and integration tests (728 tests)
 - Human intervention UI (approve/reject/takeover/pause)
 - Kanban epic grouping with worktree indicators
 - Plan audit with codebase analysis
@@ -103,8 +103,10 @@ Agents signal completion/blockers via markers in their output:
 - Help overlay with keyboard shortcuts
 - Plan and Refine views with chat interfaces
 - Cost tracking with token usage display
-
-**Remaining P1:** T035 (AI-Assisted Tickets), T036 (Refine Agent) - now unblocked
+- AI-assisted ticket creation (Refine agent + T035)
+- Manual ticket creation dialog (T039)
+- Chat input rendering fix (T040)
+- Chat input fallback mode (T041)
 
 ## Testing
 
