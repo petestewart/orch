@@ -89,6 +89,8 @@ export interface AppState {
   // Plan view state
   planViewActivePane: 'chat' | 'docs'
   planViewActiveDoc: 'prd' | 'plan' | 'tickets'
+  planViewChatMessages: ChatMessage[]
+  planViewPendingMessage: boolean // True when waiting for AI response
   // Refine view state
   refineViewActivePane: 'sidebar' | 'chat' | 'audit'
   refineViewSelectedTicket: number
@@ -115,6 +117,10 @@ export interface AppState {
     infos: number
   }
   selectedAuditFindingIndex: number
+  // Help Overlay state (T019)
+  showHelpOverlay: boolean
+  // Cost tracking state (T025)
+  totalCost: number
 }
 
 export type AuditSeverity = 'error' | 'warning' | 'info'

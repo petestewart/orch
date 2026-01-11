@@ -7,7 +7,7 @@
  * Implements: T010
  */
 
-import type { AppState, Epic, Ticket, Agent, LogEntry, TicketStatus, AuditFindingUI, TicketAutomationMode } from './types.js';
+import type { AppState, Epic, Ticket, Agent, LogEntry, TicketStatus, AuditFindingUI, TicketAutomationMode, ChatMessage } from './types.js';
 import type {
   Ticket as CoreTicket,
   Agent as CoreAgent,
@@ -121,8 +121,13 @@ function formatElapsed(startedAt: Date | undefined): string {
 
 /**
  * Map core Agent to UI Agent format
+ * @param coreAgent The core agent data
+ * @param tokenData Optional actual token counts (T025: Cost Tracking)
  */
-function mapAgent(coreAgent: CoreAgent): Agent {
+function mapAgent(
+  coreAgent: CoreAgent,
+  tokenData?: { inputTokens: number; outputTokens: number; cost: number }
+): Agent {
   return {
     id: coreAgent.id,
     name: coreAgent.id, // Use ID as name
@@ -131,9 +136,10 @@ function mapAgent(coreAgent: CoreAgent): Agent {
     currentTicketId: coreAgent.ticketId?.toLowerCase(),
     progress: coreAgent.progress,
     elapsed: formatElapsed(coreAgent.startedAt),
-    tokensIn: Math.round(coreAgent.tokensUsed * 0.8), // Estimate 80% input
-    tokensOut: Math.round(coreAgent.tokensUsed * 0.2), // Estimate 20% output
-    cost: coreAgent.cost,
+    // Use actual token counts if available, otherwise estimate from tokensUsed
+    tokensIn: tokenData?.inputTokens ?? Math.round(coreAgent.tokensUsed * 0.8),
+    tokensOut: tokenData?.outputTokens ?? Math.round(coreAgent.tokensUsed * 0.2),
+    cost: tokenData?.cost ?? coreAgent.cost,
     lastAction: coreAgent.lastAction,
   };
 }
@@ -187,6 +193,9 @@ export class Store {
   private coreAgents: Map<string, CoreAgent> = new Map();
   private coreEpics: Map<string, CoreEpic> = new Map();
 
+  // Track per-agent token counts (T025: Cost Tracking)
+  private agentTokens: Map<string, { inputTokens: number; outputTokens: number; cost: number }> = new Map();
+
   constructor(eventBus?: EventBus) {
     this.eventBus = eventBus || getEventBus();
 
@@ -214,6 +223,8 @@ export class Store {
       // Plan view state
       planViewActivePane: 'chat',
       planViewActiveDoc: 'prd',
+      planViewChatMessages: [],
+      planViewPendingMessage: false,
       // Refine view state
       refineViewActivePane: 'sidebar',
       refineViewSelectedTicket: 0,
@@ -227,6 +238,10 @@ export class Store {
       auditFindings: [],
       auditSummary: undefined,
       selectedAuditFindingIndex: 0,
+      // Help Overlay state (T019)
+      showHelpOverlay: false,
+      // Cost tracking state (T025)
+      totalCost: 0,
     };
 
     // Subscribe to all relevant events
@@ -396,7 +411,11 @@ export class Store {
     };
 
     this.coreAgents.set(event.agentId, coreAgent);
-    this.state.agents.push(mapAgent(coreAgent));
+
+    // Initialize token tracking for this agent (T025: Cost Tracking)
+    const tokenData = { inputTokens: 0, outputTokens: 0, cost: 0 };
+    this.agentTokens.set(event.agentId, tokenData);
+    this.state.agents.push(mapAgent(coreAgent, tokenData));
 
     // Update ticket assignee
     const ticketId = event.ticketId.toLowerCase();
@@ -421,12 +440,24 @@ export class Store {
       coreAgent.progress = event.progress;
       coreAgent.lastAction = event.lastAction;
       coreAgent.tokensUsed = event.tokensUsed;
+      coreAgent.cost = event.cost;
 
-      // Update UI agent
+      // Update token tracking with actual values (T025: Cost Tracking)
+      const tokenData = {
+        inputTokens: event.inputTokens,
+        outputTokens: event.outputTokens,
+        cost: event.cost,
+      };
+      this.agentTokens.set(event.agentId, tokenData);
+
+      // Update UI agent with actual token counts
       const agentIndex = this.state.agents.findIndex(a => a.id === event.agentId);
       if (agentIndex >= 0) {
-        this.state.agents[agentIndex] = mapAgent(coreAgent);
+        this.state.agents[agentIndex] = mapAgent(coreAgent, tokenData);
       }
+
+      // Update total cost across all agents
+      this.updateTotalCost();
 
       // Update ticket progress
       const ticketId = event.ticketId.toLowerCase();
@@ -442,6 +473,17 @@ export class Store {
 
       this.notifyChange();
     }
+  }
+
+  /**
+   * Update total cost from all agents (T025: Cost Tracking)
+   */
+  private updateTotalCost(): void {
+    let total = 0;
+    for (const tokenData of this.agentTokens.values()) {
+      total += tokenData.cost;
+    }
+    this.state.totalCost = total;
   }
 
   /**
@@ -646,6 +688,13 @@ export class Store {
     return this.state.agents.find(a => a.id === id);
   }
 
+  /**
+   * Get total cost across all agents (T025: Cost Tracking)
+   */
+  getTotalCost(): number {
+    return this.state.totalCost;
+  }
+
   setCurrentView(view: AppState['currentView']) {
     this.state.currentView = view;
     this.notifyChange();
@@ -772,6 +821,60 @@ export class Store {
   setPlanViewActiveDoc(doc: 'prd' | 'plan' | 'tickets') {
     this.state.planViewActiveDoc = doc;
     this.notifyChange();
+  }
+
+  /**
+   * Add a user message to the plan view chat
+   */
+  addPlanViewUserMessage(content: string): void {
+    const message: ChatMessage = {
+      id: `plan-msg-${Date.now()}`,
+      role: 'user',
+      content,
+      timestamp: this.formatTimestamp(new Date()),
+    };
+    this.state.planViewChatMessages.push(message);
+    this.state.planViewPendingMessage = true;
+    this.notifyChange();
+  }
+
+  /**
+   * Add an AI response to the plan view chat
+   */
+  addPlanViewAIMessage(content: string): void {
+    const message: ChatMessage = {
+      id: `plan-msg-${Date.now()}`,
+      role: 'assistant',
+      content,
+      timestamp: this.formatTimestamp(new Date()),
+    };
+    this.state.planViewChatMessages.push(message);
+    this.state.planViewPendingMessage = false;
+    this.notifyChange();
+  }
+
+  /**
+   * Get plan view chat messages
+   */
+  getPlanViewChatMessages(): ChatMessage[] {
+    return this.state.planViewChatMessages;
+  }
+
+  /**
+   * Check if waiting for AI response
+   */
+  isPlanViewPendingMessage(): boolean {
+    return this.state.planViewPendingMessage;
+  }
+
+  /**
+   * Format timestamp for chat messages (HH:MM:SS format)
+   */
+  private formatTimestamp(date: Date): string {
+    const hours = date.getHours().toString().padStart(2, '0');
+    const minutes = date.getMinutes().toString().padStart(2, '0');
+    const seconds = date.getSeconds().toString().padStart(2, '0');
+    return `${hours}:${minutes}:${seconds}`;
   }
 
   setRefineViewActivePane(pane: 'sidebar' | 'chat' | 'audit') {
@@ -1136,5 +1239,33 @@ export class Store {
       this.state.selectedAuditFindingIndex--;
       this.notifyChange();
     }
+  }
+
+  // ============================================================================
+  // Help Overlay (T019)
+  // ============================================================================
+
+  /**
+   * Toggle the help overlay visibility
+   */
+  toggleHelpOverlay(): void {
+    this.state.showHelpOverlay = !this.state.showHelpOverlay;
+    this.notifyChange();
+  }
+
+  /**
+   * Show the help overlay
+   */
+  showHelpOverlay(): void {
+    this.state.showHelpOverlay = true;
+    this.notifyChange();
+  }
+
+  /**
+   * Hide the help overlay
+   */
+  hideHelpOverlay(): void {
+    this.state.showHelpOverlay = false;
+    this.notifyChange();
   }
 }

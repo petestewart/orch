@@ -120,6 +120,19 @@ export interface CostLimitConfig {
   action: 'pause' | 'warn' | 'stop';
 }
 
+export interface ErrorRecoveryConfig {
+  /** Number of retry attempts for network/agent failures (default: 3) */
+  maxRetries: number;
+  /** Initial backoff delay in milliseconds (default: 1000) */
+  initialBackoffMs: number;
+  /** Maximum backoff delay in milliseconds (default: 30000) */
+  maxBackoffMs: number;
+  /** Backoff multiplier for exponential backoff (default: 2) */
+  backoffMultiplier: number;
+  /** Whether to auto-retry failed tickets (default: false) */
+  autoRetryFailed: boolean;
+}
+
 export interface EpicConfig {
   autoCreateWorktrees: boolean;
   maxWorktreesPerEpic: number;
@@ -133,6 +146,7 @@ export interface OrchConfig {
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   automation: AutomationConfig;
   costLimit?: CostLimitConfig;
+  errorRecovery?: ErrorRecoveryConfig;
   epics?: EpicConfig;
   ui?: {
     defaultView: string;
@@ -200,6 +214,9 @@ export interface AgentProgressEvent extends BaseEvent {
   progress: number;
   lastAction: string;
   tokensUsed: number;
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;
 }
 
 export interface AgentSpawnedEvent extends BaseEvent {

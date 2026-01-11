@@ -53,6 +53,9 @@ describe('EventBus', () => {
         progress: 50,
         lastAction: 'Reading files',
         tokensUsed: 1000,
+        inputTokens: 800,
+        outputTokens: 200,
+        cost: 0.0054,
       };
       bus.publish(event);
 
@@ -194,6 +197,9 @@ describe('EventBus', () => {
         progress: 50,
         lastAction: 'Working',
         tokensUsed: 500,
+        inputTokens: 400,
+        outputTokens: 100,
+        cost: 0.0027,
       };
       bus.publish(progressEvent);
 
@@ -268,6 +274,9 @@ describe('EventBus', () => {
         progress: 50,
         lastAction: 'Working',
         tokensUsed: 500,
+        inputTokens: 400,
+        outputTokens: 100,
+        cost: 0.0027,
       };
       bus.publish(logEvent);
       bus.publish(progressEvent);

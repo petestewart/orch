@@ -8,7 +8,7 @@
 
 import { existsSync, readFileSync, watch, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
-import type { OrchConfig, AutomationMode, AutomationConfig, CostLimitConfig } from './types';
+import type { OrchConfig, AutomationMode, AutomationConfig, CostLimitConfig, ErrorRecoveryConfig } from './types';
 
 const DEFAULT_CONFIG: OrchConfig = {
   maxAgents: 5,
@@ -19,6 +19,13 @@ const DEFAULT_CONFIG: OrchConfig = {
     ticketProgression: 'automatic',
     review: { mode: 'automatic' },
     qa: { mode: 'automatic' },
+  },
+  errorRecovery: {
+    maxRetries: 3,
+    initialBackoffMs: 1000,
+    maxBackoffMs: 30000,
+    backoffMultiplier: 2,
+    autoRetryFailed: false,
   },
 };
 
@@ -233,6 +240,12 @@ export function validateConfig(config: unknown): ConfigError[] {
     errors.push(...costLimitErrors.map(e => ({ ...e, path: `costLimit.${e.path}` })));
   }
 
+  // Validate errorRecovery config
+  if ('errorRecovery' in cfg) {
+    const errorRecoveryErrors = validateErrorRecoveryConfig(cfg.errorRecovery);
+    errors.push(...errorRecoveryErrors.map(e => ({ ...e, path: `errorRecovery.${e.path}` })));
+  }
+
   // Validate epics config
   if ('epics' in cfg) {
     const epicsErrors = validateEpicsConfig(cfg.epics);
@@ -364,6 +377,50 @@ function validateCostLimitConfig(costLimit: unknown): ConfigError[] {
 }
 
 /**
+ * Validate error recovery config
+ */
+function validateErrorRecoveryConfig(errorRecovery: unknown): ConfigError[] {
+  const errors: ConfigError[] = [];
+
+  if (typeof errorRecovery !== 'object' || errorRecovery === null) {
+    errors.push({ path: '', message: 'Must be an object' });
+    return errors;
+  }
+
+  const cfg = errorRecovery as Record<string, unknown>;
+
+  if ('maxRetries' in cfg) {
+    if (typeof cfg.maxRetries !== 'number' || cfg.maxRetries < 0 || !Number.isInteger(cfg.maxRetries)) {
+      errors.push({ path: 'maxRetries', message: 'Must be a non-negative integer' });
+    }
+  }
+
+  if ('initialBackoffMs' in cfg) {
+    if (typeof cfg.initialBackoffMs !== 'number' || cfg.initialBackoffMs < 0) {
+      errors.push({ path: 'initialBackoffMs', message: 'Must be a non-negative number' });
+    }
+  }
+
+  if ('maxBackoffMs' in cfg) {
+    if (typeof cfg.maxBackoffMs !== 'number' || cfg.maxBackoffMs < 0) {
+      errors.push({ path: 'maxBackoffMs', message: 'Must be a non-negative number' });
+    }
+  }
+
+  if ('backoffMultiplier' in cfg) {
+    if (typeof cfg.backoffMultiplier !== 'number' || cfg.backoffMultiplier < 1) {
+      errors.push({ path: 'backoffMultiplier', message: 'Must be a number >= 1' });
+    }
+  }
+
+  if ('autoRetryFailed' in cfg && typeof cfg.autoRetryFailed !== 'boolean') {
+    errors.push({ path: 'autoRetryFailed', message: 'Must be a boolean' });
+  }
+
+  return errors;
+}
+
+/**
  * Validate epics config
  */
 function validateEpicsConfig(epics: unknown): ConfigError[] {
@@ -428,6 +485,8 @@ function validateUiConfig(ui: unknown): ConfigError[] {
  * ORCH_MAX_AGENTS, ORCH_LOG_LEVEL, ORCH_AGENT_MODEL, ORCH_PLAN_FILE
  * ORCH_AUTOMATION_TICKET_PROGRESSION, ORCH_AUTOMATION_REVIEW_MODE, ORCH_AUTOMATION_QA_MODE
  * ORCH_COST_LIMIT_PER_TICKET, ORCH_COST_LIMIT_PER_SESSION, ORCH_COST_LIMIT_ACTION
+ * ORCH_ERROR_RECOVERY_MAX_RETRIES, ORCH_ERROR_RECOVERY_INITIAL_BACKOFF_MS,
+ * ORCH_ERROR_RECOVERY_MAX_BACKOFF_MS, ORCH_ERROR_RECOVERY_BACKOFF_MULTIPLIER, ORCH_ERROR_RECOVERY_AUTO_RETRY
  */
 export function getEnvOverrides(): Partial<OrchConfig> {
   const overrides: Partial<OrchConfig> = {};
@@ -465,6 +524,12 @@ export function getEnvOverrides(): Partial<OrchConfig> {
   const costLimitOverrides = getCostLimitEnvOverrides();
   if (Object.keys(costLimitOverrides).length > 0) {
     overrides.costLimit = costLimitOverrides as CostLimitConfig;
+  }
+
+  // Error recovery settings
+  const errorRecoveryOverrides = getErrorRecoveryEnvOverrides();
+  if (Object.keys(errorRecoveryOverrides).length > 0) {
+    overrides.errorRecovery = errorRecoveryOverrides as ErrorRecoveryConfig;
   }
 
   return overrides;
@@ -525,6 +590,48 @@ function getCostLimitEnvOverrides(): Partial<CostLimitConfig> {
     if (VALID_COST_ACTIONS.includes(action as typeof VALID_COST_ACTIONS[number])) {
       overrides.action = action as CostLimitConfig['action'];
     }
+  }
+
+  return overrides;
+}
+
+/**
+ * Get error recovery config from environment variables
+ */
+function getErrorRecoveryEnvOverrides(): Partial<ErrorRecoveryConfig> {
+  const overrides: Partial<ErrorRecoveryConfig> = {};
+
+  if (process.env.ORCH_ERROR_RECOVERY_MAX_RETRIES) {
+    const value = parseInt(process.env.ORCH_ERROR_RECOVERY_MAX_RETRIES, 10);
+    if (!isNaN(value) && value >= 0) {
+      overrides.maxRetries = value;
+    }
+  }
+
+  if (process.env.ORCH_ERROR_RECOVERY_INITIAL_BACKOFF_MS) {
+    const value = parseInt(process.env.ORCH_ERROR_RECOVERY_INITIAL_BACKOFF_MS, 10);
+    if (!isNaN(value) && value >= 0) {
+      overrides.initialBackoffMs = value;
+    }
+  }
+
+  if (process.env.ORCH_ERROR_RECOVERY_MAX_BACKOFF_MS) {
+    const value = parseInt(process.env.ORCH_ERROR_RECOVERY_MAX_BACKOFF_MS, 10);
+    if (!isNaN(value) && value >= 0) {
+      overrides.maxBackoffMs = value;
+    }
+  }
+
+  if (process.env.ORCH_ERROR_RECOVERY_BACKOFF_MULTIPLIER) {
+    const value = parseFloat(process.env.ORCH_ERROR_RECOVERY_BACKOFF_MULTIPLIER);
+    if (!isNaN(value) && value >= 1) {
+      overrides.backoffMultiplier = value;
+    }
+  }
+
+  if (process.env.ORCH_ERROR_RECOVERY_AUTO_RETRY) {
+    const value = process.env.ORCH_ERROR_RECOVERY_AUTO_RETRY.toLowerCase();
+    overrides.autoRetryFailed = value === 'true' || value === '1';
   }
 
   return overrides;

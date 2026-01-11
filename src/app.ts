@@ -13,6 +13,7 @@ import { colors } from './utils/colors.js'
 import { createHeader } from './components/Header.js'
 import { createTabBar, getViewByNumber, type ViewName } from './components/TabBar.js'
 import { createStatusBar } from './components/StatusBar.js'
+import { createHelpOverlay } from './components/HelpOverlay.js'
 import { createKanbanView, getColumnTicketCount, getColumnCount, COLUMNS } from './views/KanbanView.js'
 import { createTicketView } from './views/TicketView.js'
 import { createSessionView } from './views/SessionView.js'
@@ -40,6 +41,9 @@ export class App {
 
   // Current view reference
   private currentViewComponent: BoxRenderable | null = null
+
+  // Help overlay reference (T019)
+  private helpOverlayComponent: BoxRenderable | null = null
 
   // Cached plan for audit (T038)
   private cachedPlan: ParsedPlan | null = null
@@ -102,6 +106,7 @@ export class App {
     this.statusBar = createStatusBar(this.ctx, {
       currentView: state.currentView,
       pendingApprovalsCount: this.store.getPendingApprovalsCount(),
+      totalCost: this.store.getTotalCost(), // T025: Cost Tracking
     })
 
     // Add to main container
@@ -119,6 +124,36 @@ export class App {
 
   private setupKeyboardHandlers() {
     this.renderer.keyInput.on('keypress', (key) => {
+      const state = this.store.getState()
+
+      // Handle help overlay toggle with '?' (T019)
+      if (key.name === '?') {
+        this.toggleHelpOverlay()
+        return
+      }
+
+      // Handle escape - closes help overlay first, then other overlays (T019)
+      if (key.name === 'escape') {
+        // If help overlay is showing, close it first
+        if (state.showHelpOverlay) {
+          this.store.hideHelpOverlay()
+          this.renderHelpOverlay()
+          return
+        }
+
+        // If viewing a ticket, close the ticket view and return to Kanban
+        if (state.currentView === 'kanban' && state.viewingTicketId) {
+          this.store.setViewingTicketId(undefined)
+          this.renderCurrentView()
+          return
+        }
+      }
+
+      // If help overlay is showing, don't process other keys
+      if (state.showHelpOverlay) {
+        return
+      }
+
       // Handle quit
       if (key.name === 'q' || (key.ctrl && key.name === 'c')) {
         this.quit()
@@ -132,23 +167,6 @@ export class App {
           this.switchView(view)
         }
         return
-      }
-
-      // Handle help
-      if (key.name === '?') {
-        this.showHelp()
-        return
-      }
-
-      // Handle escape
-      if (key.name === 'escape') {
-        const state = this.store.getState()
-        // If viewing a ticket, close the ticket view and return to Kanban
-        if (state.currentView === 'kanban' && state.viewingTicketId) {
-          this.store.setViewingTicketId(undefined)
-          this.renderCurrentView()
-          return
-        }
       }
 
       // Pass to current view for view-specific handling
@@ -173,6 +191,7 @@ export class App {
     this.statusBar = createStatusBar(this.ctx, {
       currentView: view,
       pendingApprovalsCount: this.store.getPendingApprovalsCount(),
+      totalCost: this.store.getTotalCost(), // T025: Cost Tracking
     })
     this.mainContainer.add(this.statusBar)
 
@@ -241,8 +260,10 @@ export class App {
       })
     } else if (state.currentView === 'plan') {
       viewContent = createPlanView(this.ctx, {
+        store: this.store,
         activePane: state.planViewActivePane,
         activeDoc: state.planViewActiveDoc,
+        planContent: this.cachedPlan?.rawContent,
         onPaneChange: (pane) => {
           this.store.setPlanViewActivePane(pane)
           this.renderCurrentView()
@@ -250,6 +271,9 @@ export class App {
         onDocChange: (doc) => {
           this.store.setPlanViewActiveDoc(doc)
           this.renderCurrentView()
+        },
+        onSendMessage: (content) => {
+          this.handlePlanChatMessage(content)
         },
       })
     } else if (state.currentView === 'refine') {
@@ -626,6 +650,117 @@ export class App {
     }
   }
 
+  /**
+   * Handle chat messages in Plan View (T020)
+   * For now, generates mock AI responses. Real AI integration is a future ticket.
+   */
+  private handlePlanChatMessage(content: string): void {
+    // Add user message to store
+    this.store.addPlanViewUserMessage(content)
+    this.renderCurrentView()
+
+    // Generate mock AI response after a small delay
+    setTimeout(() => {
+      const response = this.generateMockPlanResponse(content)
+      this.store.addPlanViewAIMessage(response)
+      this.renderCurrentView()
+    }, 500)
+  }
+
+  /**
+   * Generate a mock AI response for Plan View (T020)
+   * This will be replaced with real AI integration in a future ticket.
+   */
+  private generateMockPlanResponse(userMessage: string): string {
+    const lowerMessage = userMessage.toLowerCase()
+
+    // Check for common planning-related keywords and generate contextual responses
+    if (lowerMessage.includes('create') || lowerMessage.includes('add') || lowerMessage.includes('new ticket')) {
+      return `I can help you create a new ticket. Here's what I would add to PLAN.md:
+
+### Ticket: TXXX [Your Title Here]
+- **Priority:** P1
+- **Status:** Todo
+- **Owner:** Unassigned
+- **Scope:** [Description of what this ticket accomplishes]
+- **Acceptance Criteria:**
+  - [Criterion 1]
+  - [Criterion 2]
+- **Validation Steps:**
+  - [Test command or verification step]
+
+Would you like me to create this ticket with specific details?`
+    }
+
+    if (lowerMessage.includes('dependency') || lowerMessage.includes('dependencies') || lowerMessage.includes('blocked')) {
+      const state = this.store.getState()
+      const blockedTickets = state.tickets.filter(t => t.blockedBy.length > 0)
+      if (blockedTickets.length > 0) {
+        const blockedList = blockedTickets.slice(0, 3).map(t =>
+          `- ${t.id.toUpperCase()}: ${t.title} (blocked by: ${t.blockedBy.map(b => b.toUpperCase()).join(', ')})`
+        ).join('\n')
+        return `Here are tickets with dependencies:\n\n${blockedList}\n\nWould you like me to analyze the dependency chain or suggest reordering?`
+      }
+      return 'Currently there are no tickets with dependencies. Would you like me to help you define dependencies between existing tickets?'
+    }
+
+    if (lowerMessage.includes('status') || lowerMessage.includes('progress')) {
+      const state = this.store.getState()
+      const statusCounts: Record<string, number> = {}
+      state.tickets.forEach(t => {
+        statusCounts[t.status] = (statusCounts[t.status] || 0) + 1
+      })
+      const summary = Object.entries(statusCounts)
+        .map(([status, count]) => `${status}: ${count}`)
+        .join(', ')
+      return `Current project status:\n\n${summary}\n\nTotal tickets: ${state.tickets.length}\n\nWould you like more details on any specific status?`
+    }
+
+    if (lowerMessage.includes('priorit') || lowerMessage.includes('p0') || lowerMessage.includes('p1') || lowerMessage.includes('p2')) {
+      return `I can help you manage ticket priorities. The priority levels are:
+
+- **P0:** Critical - Must be done immediately
+- **P1:** High - Important for the current milestone
+- **P2:** Medium - Should be done but can wait
+
+Would you like me to:
+1. List tickets by priority
+2. Suggest priority changes
+3. Help you reprioritize the backlog`
+    }
+
+    if (lowerMessage.includes('help') || lowerMessage.includes('what can you do')) {
+      return `I can help you with project planning tasks:
+
+**Creating & Editing:**
+- Create new tickets with acceptance criteria
+- Modify existing ticket details
+- Add or update dependencies
+
+**Analysis:**
+- Analyze the dependency graph
+- Identify blocked tickets
+- Suggest priority adjustments
+
+**Reporting:**
+- Summarize project status
+- List tickets by status or priority
+- Show upcoming work
+
+What would you like to work on?`
+    }
+
+    // Default response
+    return `I understand you're asking about: "${userMessage}"
+
+As a planning assistant, I can help you:
+- Create or modify tickets
+- Analyze dependencies
+- Review project status
+
+Could you please provide more details about what you'd like to accomplish?`
+  }
+
   private handleRefineKeypress(key: { name?: string; ctrl?: boolean; shift?: boolean }) {
     const state = this.store.getState()
     const ticketCount = state.tickets.length
@@ -759,9 +894,33 @@ export class App {
     }
   }
 
-  private showHelp() {
-    // TODO: Implement help overlay
-    // For now, just a placeholder
+  /**
+   * Toggle the help overlay visibility (T019)
+   */
+  private toggleHelpOverlay() {
+    this.store.toggleHelpOverlay()
+    this.renderHelpOverlay()
+  }
+
+  /**
+   * Render or remove the help overlay based on state (T019)
+   */
+  private renderHelpOverlay() {
+    const state = this.store.getState()
+
+    // Remove existing overlay if present
+    if (this.helpOverlayComponent) {
+      this.renderer.root.remove(this.helpOverlayComponent.id)
+      this.helpOverlayComponent = null
+    }
+
+    // Add new overlay if needed
+    if (state.showHelpOverlay) {
+      this.helpOverlayComponent = createHelpOverlay(this.ctx, {
+        currentView: state.currentView,
+      })
+      this.renderer.root.add(this.helpOverlayComponent)
+    }
   }
 
   private startSimulation() {

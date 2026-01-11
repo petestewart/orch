@@ -51,6 +51,7 @@ const VIEW_SHORTCUTS: Record<AppState['currentView'], ShortcutDef[]> = {
 export interface StatusBarProps {
   currentView: AppState['currentView']
   pendingApprovalsCount?: number
+  totalCost?: number // T025: Cost Tracking
 }
 
 export function createStatusBar(ctx: RenderContext, props: StatusBarProps): BoxRenderable {
@@ -63,6 +64,14 @@ export function createStatusBar(ctx: RenderContext, props: StatusBarProps): BoxR
     paddingRight: 1,
     gap: 2,
   })
+
+  // Show total cost if > 0 (T025: Cost Tracking)
+  if (props.totalCost !== undefined && props.totalCost > 0) {
+    const costText = new TextRenderable(ctx, {
+      content: t`${bg(colors.cyan)(fg(colors.bgDark)(` $${props.totalCost.toFixed(2)} `))}`,
+    })
+    statusBar.add(costText)
+  }
 
   // Show pending approvals count if > 0 (T029)
   if (props.pendingApprovalsCount && props.pendingApprovalsCount > 0) {

@@ -9,6 +9,7 @@
 
 import type { Ticket, Epic, TicketPriority, TicketStatus } from './types';
 import { getEventBus } from './events';
+import { logPlanParseError, logError, PlanParseError } from './error-recovery';
 
 export interface ParsedPlan {
   overview: string;
@@ -52,87 +53,142 @@ export class PlanStore {
   /**
    * Load and parse PLAN.md
    * Emits 'plan:loaded' on success, 'plan:error' on failure
+   * T018: Enhanced error handling - logs detailed parse errors and prevents orchestration on failure
    */
   async load(): Promise<ParsedPlan> {
-    const file = Bun.file(this.planPath);
-    const exists = await file.exists();
+    try {
+      const file = Bun.file(this.planPath);
+      const exists = await file.exists();
 
-    if (!exists) {
-      const error: ParseError = {
-        line: 0,
-        message: `Plan file not found: ${this.planPath}`,
+      if (!exists) {
+        // T018: Log plan parse error with context
+        const parseError = new PlanParseError(
+          `Plan file not found: ${this.planPath}`,
+          this.planPath
+        );
+        logPlanParseError(this.planPath, parseError);
+        getEventBus().publish({
+          type: 'plan:error',
+          timestamp: new Date(),
+        });
+        throw parseError;
+      }
+
+      let rawContent: string;
+      try {
+        rawContent = await file.text();
+      } catch (readError) {
+        // T018: Log file read error
+        const parseError = new PlanParseError(
+          `Failed to read plan file: ${readError instanceof Error ? readError.message : String(readError)}`,
+          this.planPath
+        );
+        logPlanParseError(this.planPath, parseError);
+        getEventBus().publish({
+          type: 'plan:error',
+          timestamp: new Date(),
+        });
+        throw parseError;
+      }
+
+      const lines = rawContent.split('\n');
+
+      // Extract overview (content between ## 1. Overview and next ##)
+      const overview = extractSection(lines, /^##\s*1\.\s*Overview/i, /^##\s*\d+\./);
+
+      // Extract Definition of Done items
+      const definitionOfDone = extractDefinitionOfDone(lines);
+
+      // Parse tickets
+      const ticketsResult = parseAllTickets(rawContent);
+      if ('line' in ticketsResult && 'message' in ticketsResult) {
+        // T018: Log detailed parse error and prevent orchestration
+        const parseError = new PlanParseError(
+          ticketsResult.message,
+          this.planPath,
+          ticketsResult.line
+        );
+        logPlanParseError(this.planPath, parseError, ticketsResult.line);
+        getEventBus().publish({
+          type: 'plan:error',
+          timestamp: new Date(),
+        });
+        throw parseError;
+      }
+
+      // Parse epics
+      const epics = parseEpics(rawContent);
+      const tickets = ticketsResult as Ticket[];
+
+      // Collect epic warnings
+      this.epicWarnings = [];
+
+      // Validate epic paths
+      const basePath = await import('node:path').then(p => p.dirname(this.planPath));
+      const pathWarnings = await validateEpicPaths(epics, basePath);
+      for (const warning of pathWarnings) {
+        this.epicWarnings.push({
+          type: warning.path ? 'invalid_path' : 'missing_path',
+          epic: warning.epic,
+          path: warning.path || undefined,
+          message: warning.message,
+        });
+        // T018: Log epic path warnings (non-fatal)
+        logError(warning.message, 'warn', {
+          epic: warning.epic,
+          path: warning.path,
+          planPath: this.planPath,
+        });
+      }
+
+      // Check for missing epic assignments
+      const assignmentWarnings = findMissingEpicAssignments(tickets, epics);
+      for (const warning of assignmentWarnings) {
+        this.epicWarnings.push({
+          type: warning.message.includes('undefined epic') ? 'undefined_epic' : 'missing_assignment',
+          ticketId: warning.ticketId,
+          message: warning.message,
+        });
+        // T018: Log epic assignment warnings (non-fatal)
+        logError(warning.message, 'warn', {
+          ticketId: warning.ticketId,
+          planPath: this.planPath,
+        });
+      }
+
+      this.plan = {
+        overview,
+        definitionOfDone,
+        epics,
+        tickets,
+        rawContent,
       };
+
+      getEventBus().publish({
+        type: 'plan:loaded',
+        timestamp: new Date(),
+        tickets: this.plan.tickets,
+        epics: this.plan.epics,
+      });
+
+      return this.plan;
+    } catch (error) {
+      // T018: If it's already a PlanParseError, rethrow as-is
+      if (error instanceof PlanParseError) {
+        throw error;
+      }
+      // Wrap unexpected errors in PlanParseError for consistent handling
+      const parseError = new PlanParseError(
+        `Unexpected error loading plan: ${error instanceof Error ? error.message : String(error)}`,
+        this.planPath
+      );
+      logPlanParseError(this.planPath, parseError);
       getEventBus().publish({
         type: 'plan:error',
         timestamp: new Date(),
       });
-      throw new Error(error.message);
+      throw parseError;
     }
-
-    const rawContent = await file.text();
-    const lines = rawContent.split('\n');
-
-    // Extract overview (content between ## 1. Overview and next ##)
-    const overview = extractSection(lines, /^##\s*1\.\s*Overview/i, /^##\s*\d+\./);
-
-    // Extract Definition of Done items
-    const definitionOfDone = extractDefinitionOfDone(lines);
-
-    // Parse tickets
-    const ticketsResult = parseAllTickets(rawContent);
-    if ('line' in ticketsResult && 'message' in ticketsResult) {
-      getEventBus().publish({
-        type: 'plan:error',
-        timestamp: new Date(),
-      });
-      throw new Error(`Parse error at line ${ticketsResult.line}: ${ticketsResult.message}`);
-    }
-
-    // Parse epics
-    const epics = parseEpics(rawContent);
-    const tickets = ticketsResult as Ticket[];
-
-    // Collect epic warnings
-    this.epicWarnings = [];
-
-    // Validate epic paths
-    const basePath = await import('node:path').then(p => p.dirname(this.planPath));
-    const pathWarnings = await validateEpicPaths(epics, basePath);
-    for (const warning of pathWarnings) {
-      this.epicWarnings.push({
-        type: warning.path ? 'invalid_path' : 'missing_path',
-        epic: warning.epic,
-        path: warning.path || undefined,
-        message: warning.message,
-      });
-    }
-
-    // Check for missing epic assignments
-    const assignmentWarnings = findMissingEpicAssignments(tickets, epics);
-    for (const warning of assignmentWarnings) {
-      this.epicWarnings.push({
-        type: warning.message.includes('undefined epic') ? 'undefined_epic' : 'missing_assignment',
-        ticketId: warning.ticketId,
-        message: warning.message,
-      });
-    }
-
-    this.plan = {
-      overview,
-      definitionOfDone,
-      epics,
-      tickets,
-      rawContent,
-    };
-
-    getEventBus().publish({
-      type: 'plan:loaded',
-      timestamp: new Date(),
-      tickets: this.plan.tickets,
-      epics: this.plan.epics,
-    });
-
-    return this.plan;
   }
 
   /**

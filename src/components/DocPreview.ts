@@ -5,6 +5,7 @@ export interface DocPreviewProps {
   activeDoc: 'prd' | 'plan' | 'tickets'
   onDocChange?: (doc: 'prd' | 'plan' | 'tickets') => void
   isModified?: boolean
+  customPlanContent?: string // Optional custom content for PLAN.md
 }
 
 // Mock document content
@@ -99,7 +100,7 @@ const DOC_OPTIONS = [
 ]
 
 export function createDocPreview(ctx: RenderContext, props: DocPreviewProps): BoxRenderable {
-  const { activeDoc, onDocChange, isModified = false } = props
+  const { activeDoc, onDocChange, isModified = false, customPlanContent } = props
 
   // Main container
   const container = new BoxRenderable(ctx, {
@@ -176,8 +177,10 @@ export function createDocPreview(ctx: RenderContext, props: DocPreviewProps): Bo
     flexDirection: 'column',
   })
 
-  // Get the current document content
-  const docContent = mockDocs[activeDoc]
+  // Get the current document content (use custom content for plan if provided)
+  const docContent = activeDoc === 'plan' && customPlanContent
+    ? customPlanContent
+    : mockDocs[activeDoc]
   const lines = docContent.split('\n')
 
   // Add each line as a text element

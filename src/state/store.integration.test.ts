@@ -118,6 +118,9 @@ describe('Store Integration', () => {
       progress: 75,
       lastAction: 'Running tests',
       tokensUsed: 5000,
+      inputTokens: 4000,
+      outputTokens: 1000,
+      cost: 0.027,
     };
 
     eventBus.publish(progressEvent);

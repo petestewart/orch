@@ -4,12 +4,21 @@
  * Manages agent lifecycle: spawning, monitoring, stopping.
  * Wraps Claude Code CLI subprocess.
  *
- * Implements: T005, T006, T007
+ * Implements: T005, T006, T007, T018 (Error Recovery)
  */
 
-import type { Agent, AgentType, Ticket } from './types';
+import type { Agent, AgentType, Ticket, ErrorRecoveryConfig } from './types';
 import { getEventBus } from './events';
 import type { Subprocess } from 'bun';
+import {
+  logAgentCrash,
+  logMalformedOutput,
+  logError,
+  withRetry,
+  DEFAULT_ERROR_RECOVERY_CONFIG,
+  AgentCrashError,
+  type RetryOptions,
+} from './error-recovery';
 
 export interface SpawnOptions {
   ticketId: string;
@@ -20,6 +29,8 @@ export interface SpawnOptions {
   projectPath?: string; // Project root path
   branch?: string; // Git branch name for commits (e.g., "ticket/T001")
   epicName?: string; // Epic name for context
+  /** Error recovery configuration (optional) */
+  errorRecovery?: Partial<ErrorRecoveryConfig>;
 }
 
 export interface AgentOutput {
@@ -48,12 +59,22 @@ export class AgentManager {
   private processes: Map<string, Subprocess> = new Map();
   private outputBuffers: Map<string, AgentOutput[]> = new Map();
   private metricsMap: Map<string, AgentMetrics> = new Map();
+  private retryCountMap: Map<string, number> = new Map(); // ticketId -> retry count
   private maxAgents: number;
   private defaultModel: string;
+  private errorRecoveryConfig: ErrorRecoveryConfig;
 
-  constructor(maxAgents = 5, defaultModel = 'sonnet') {
+  constructor(
+    maxAgents = 5,
+    defaultModel = 'sonnet',
+    errorRecoveryConfig?: Partial<ErrorRecoveryConfig>
+  ) {
     this.maxAgents = maxAgents;
     this.defaultModel = defaultModel;
+    this.errorRecoveryConfig = {
+      ...DEFAULT_ERROR_RECOVERY_CONFIG,
+      ...errorRecoveryConfig,
+    };
   }
 
   /**
@@ -200,6 +221,7 @@ export class AgentManager {
 
         // Emit progress event
         const agent = this.agents.get(agentId);
+        const metrics = this.metricsMap.get(agentId);
         if (agent) {
           agent.lastAction = content.slice(0, 100); // Store first 100 chars as last action
           getEventBus().publish({
@@ -210,6 +232,9 @@ export class AgentManager {
             progress: agent.progress,
             lastAction: agent.lastAction,
             tokensUsed: agent.tokensUsed,
+            inputTokens: metrics?.inputTokens || 0,
+            outputTokens: metrics?.outputTokens || 0,
+            cost: agent.cost,
           });
         }
       }
@@ -250,6 +275,7 @@ export class AgentManager {
 
   /**
    * Handle process exit
+   * T018: Enhanced with crash logging and error context
    */
   private handleProcessExit(agentId: string, exitCode: number): void {
     const agent = this.agents.get(agentId);
@@ -282,16 +308,42 @@ export class AgentManager {
         reason: blocked.reason,
       });
     } else if (exitCode !== 0) {
+      // T018: Agent crash - log error with full context
       agent.status = 'Failed';
+      const errorMessage = `Process exited with code ${exitCode}`;
+
+      // Log the crash with context for debugging
+      logAgentCrash(
+        agentId,
+        agent.ticketId,
+        new AgentCrashError(errorMessage, agentId, agent.ticketId, exitCode),
+        exitCode
+      );
+
+      // Track retry count for this ticket
+      if (agent.ticketId) {
+        const currentRetries = this.retryCountMap.get(agent.ticketId) || 0;
+        this.retryCountMap.set(agent.ticketId, currentRetries + 1);
+      }
+
       getEventBus().publish({
         type: 'agent:failed',
         timestamp: new Date(),
         agentId,
         ticketId: agent.ticketId || '',
-        error: `Process exited with code ${exitCode}`,
+        error: errorMessage,
       });
     } else {
-      // Exited 0 but no completion marker - treat as complete
+      // Exited 0 but no completion marker
+      // T018: Log warning for malformed output but continue processing
+      if (output.length > 0) {
+        logMalformedOutput(
+          agentId,
+          output,
+          'Agent exited cleanly but no completion marker found'
+        );
+      }
+      // Still treat as complete since exit code was 0
       agent.status = 'Complete';
       agent.progress = 100;
       getEventBus().publish({
@@ -454,6 +506,49 @@ export class AgentManager {
     }
 
     return total;
+  }
+
+  // ===========================================================================
+  // T018: Error Recovery Methods
+  // ===========================================================================
+
+  /**
+   * Get the number of retry attempts for a ticket
+   */
+  getRetryCount(ticketId: string): number {
+    return this.retryCountMap.get(ticketId) || 0;
+  }
+
+  /**
+   * Check if a ticket can be retried (hasn't exceeded max retries)
+   */
+  canRetry(ticketId: string): boolean {
+    const retryCount = this.getRetryCount(ticketId);
+    return retryCount < this.errorRecoveryConfig.maxRetries;
+  }
+
+  /**
+   * Reset retry count for a ticket (call after successful completion)
+   */
+  resetRetryCount(ticketId: string): void {
+    this.retryCountMap.delete(ticketId);
+  }
+
+  /**
+   * Get the error recovery configuration
+   */
+  getErrorRecoveryConfig(): ErrorRecoveryConfig {
+    return { ...this.errorRecoveryConfig };
+  }
+
+  /**
+   * Update error recovery configuration
+   */
+  setErrorRecoveryConfig(config: Partial<ErrorRecoveryConfig>): void {
+    this.errorRecoveryConfig = {
+      ...this.errorRecoveryConfig,
+      ...config,
+    };
   }
 }
 

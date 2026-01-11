@@ -379,6 +379,9 @@ describe('Store', () => {
         progress: 50,
         lastAction: 'Reading files',
         tokensUsed: 1000,
+        inputTokens: 800,
+        outputTokens: 200,
+        cost: 0.0054,
       };
 
       eventBus.publish(event);
@@ -396,6 +399,9 @@ describe('Store', () => {
         progress: 50,
         lastAction: 'Writing tests',
         tokensUsed: 1000,
+        inputTokens: 800,
+        outputTokens: 200,
+        cost: 0.0054,
       };
 
       eventBus.publish(event);
@@ -413,6 +419,9 @@ describe('Store', () => {
         progress: 75,
         lastAction: 'Running tests',
         tokensUsed: 2000,
+        inputTokens: 1600,
+        outputTokens: 400,
+        cost: 0.0108,
       };
 
       eventBus.publish(event);
